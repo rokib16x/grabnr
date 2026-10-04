@@ -4,7 +4,7 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
-## [0.1.2] - unreleased
+## [0.1.2] - 2026-10-04
 
 ### Fixed
 - **Browser extension:** a download is now taken before the browser opens its own "Save as" panel, so the panel no longer appears next to grabnr's copy.
