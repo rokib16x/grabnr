@@ -254,7 +254,8 @@ impl Shared {
 struct Ctx {
     /// The file's URLs, primary first. Workers spread over them and move on when one fails.
     urls: Vec<String>,
-    headers: HeaderMap,
+    /// Request headers per URL (same order as `urls`): credentials only go to the host the user gave.
+    headers: Vec<HeaderMap>,
     validator: Option<String>,
     sched: Scheduler,
     file: OffsetFile,
@@ -401,13 +402,8 @@ async fn ranged(
 
     let urls = usable_urls(opts, probe, &clients).await;
     let ctx = Arc::new(Ctx {
+        headers: urls.iter().map(|u| headers_for(&opts.headers, &opts.url, u)).collect(),
         urls,
-        headers: opts.headers.iter().fold(HeaderMap::new(), |mut m, (k, v)| {
-            if let (Ok(k), Ok(v)) = (HeaderName::from_bytes(k.as_bytes()), HeaderValue::from_str(v)) {
-                m.insert(k, v);
-            }
-            m
-        }),
         validator: probe.validator().map(str::to_owned),
         sched: Scheduler::new(ranges, &done),
         file,
@@ -466,11 +462,7 @@ async fn single(
         disk::ensure_space(&opts.dest_dir, t)?;
     }
     emit(Event::Started { filename: filename.into(), total: probe.total, chunks: 1, ranges: false, resumed_chunks: 0 });
-    let mut req = client.get(&probe.final_url);
-    for (k, v) in &opts.headers {
-        req = req.header(k, v);
-    }
-    let resp = req.send().await?;
+    let resp = client.get(&probe.final_url).headers(headers_for(&opts.headers, &opts.url, &probe.final_url)).send().await?;
     if !resp.status().is_success() {
         return Err(Error::Status(resp.status().as_u16()));
     }
@@ -738,7 +730,7 @@ async fn fetch_chunk(
     end: u64,
 ) -> std::result::Result<Outcome, FetchErr> {
     let mirror = url_idx != 0;
-    let mut req = client.get(&ctx.urls[url_idx]).headers(ctx.headers.clone()).header(RANGE, format!("bytes={start}-{end}"));
+    let mut req = client.get(&ctx.urls[url_idx]).headers(ctx.headers[url_idx].clone()).header(RANGE, format!("bytes={start}-{end}"));
     // The validator belongs to the primary URL; a mirror may have different ETags for identical bytes.
     if let (Some(v), false) = (&ctx.validator, mirror) {
         req = req.header(IF_RANGE, v);
@@ -934,17 +926,11 @@ fn max_conns(opts: &Options, r: &Route) -> usize {
 async fn usable_urls(opts: &Options, primary: &Probe, clients: &[Client]) -> Vec<String> {
     let mut urls = vec![primary.final_url.clone()];
     let Some(client) = clients.first() else { return urls };
-    let headers: HeaderMap = opts.headers.iter().fold(HeaderMap::new(), |mut m, (k, v)| {
-        if let (Ok(k), Ok(v)) = (HeaderName::from_bytes(k.as_bytes()), HeaderValue::from_str(v)) {
-            m.insert(k, v);
-        }
-        m
-    });
     for m in &opts.mirrors {
         if m == &opts.url || urls.contains(m) {
             continue;
         }
-        let ok = tokio::time::timeout(Duration::from_secs(10), probe(client, m, &headers)).await;
+        let ok = tokio::time::timeout(Duration::from_secs(10), probe(client, m, &headers_for(&opts.headers, &opts.url, m))).await;
         if let Ok(Ok(p)) = ok {
             if p.ranges && p.total == primary.total {
                 urls.push(p.final_url);
@@ -952,4 +938,52 @@ async fn usable_urls(opts: &Options, primary: &Probe, clients: &[Client]) -> Vec
         }
     }
     urls
+}
+
+const SENSITIVE: [&str; 4] = ["authorization", "cookie", "proxy-authorization", "www-authenticate"];
+
+fn origin_of(url: &str) -> Option<(String, String, u16)> {
+    let u = url::Url::parse(url).ok()?;
+    Some((u.scheme().to_string(), u.host_str()?.to_ascii_lowercase(), u.port_or_known_default()?))
+}
+
+/// The request headers to send to `target`. Credentials (`Authorization`, `Cookie`, ...) are dropped when the target
+/// is not the same scheme, host and port as the URL the user gave, which happens after a redirect to a CDN and for mirrors.
+fn headers_for(headers: &[(String, String)], origin: &str, target: &str) -> HeaderMap {
+    let same = origin == target || (origin_of(origin).is_some() && origin_of(origin) == origin_of(target));
+    let mut m = HeaderMap::new();
+    for (k, v) in headers {
+        if !same && SENSITIVE.contains(&k.to_ascii_lowercase().as_str()) {
+            continue;
+        }
+        if let (Ok(k), Ok(v)) = (HeaderName::from_bytes(k.as_bytes()), HeaderValue::from_str(v)) {
+            m.insert(k, v);
+        }
+    }
+    m
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(m: &HeaderMap) -> Vec<String> {
+        let mut v: Vec<String> = m.keys().map(|k| k.as_str().to_string()).collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn credentials_stay_on_the_original_host() {
+        let h = vec![
+            ("Authorization".to_string(), "Bearer x".to_string()),
+            ("Cookie".to_string(), "a=b".to_string()),
+            ("Referer".to_string(), "https://site/".to_string()),
+        ];
+        let all = ["authorization", "cookie", "referer"];
+        assert_eq!(names(&headers_for(&h, "https://a.example/f", "https://a.example/other?x=1")), all);
+        assert_eq!(names(&headers_for(&h, "https://a.example/f", "https://cdn.example/f")), ["referer"], "another host");
+        assert_eq!(names(&headers_for(&h, "https://a.example/f", "http://a.example/f")), ["referer"], "downgrade to http");
+        assert_eq!(names(&headers_for(&h, "https://a.example/f", "https://a.example:8443/f")), ["referer"], "another port");
+    }
 }

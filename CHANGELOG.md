@@ -17,6 +17,7 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 - The UI was redesigned around an Apple-style layout.
 
 ### Fixed
+- **Security:** sign-in headers and cookies were sent to the redirected host and to mirrors on other hosts. They now go only to the host you gave, over the same scheme and port.
 - The inspector no longer shows below the list on narrow windows.
 
 ## [0.1.0]

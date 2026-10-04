@@ -17,6 +17,8 @@ struct Server {
     need_auth: Arc<std::sync::Mutex<Option<String>>>,
     /// The next N range requests send headers and then go silent, like a dead connection after sleep.
     stall_next: Arc<AtomicUsize>,
+    /// (Host header, had credentials) for every non-probe request.
+    seen: Arc<std::sync::Mutex<Vec<(String, bool)>>>,
 }
 
 fn byte(i: u64, version: u64) -> u8 {
@@ -35,11 +37,13 @@ async fn serve(ranges: bool) -> Server {
     let bytes_served = Arc::new(AtomicU64::new(0));
     let need_auth: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
     let stall_next = Arc::new(AtomicUsize::new(0));
-    let (v, f, b, na, sn) = (version.clone(), fail_first.clone(), bytes_served.clone(), need_auth.clone(), stall_next.clone());
+    let seen: Arc<std::sync::Mutex<Vec<(String, bool)>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (v, f, b, na, sn, sc) =
+        (version.clone(), fail_first.clone(), bytes_served.clone(), need_auth.clone(), stall_next.clone(), seen.clone());
     tokio::spawn(async move {
         loop {
             let Ok((mut sock, _)) = listener.accept().await else { return };
-            let (v, f, b, na, sn) = (v.clone(), f.clone(), b.clone(), na.clone(), sn.clone());
+            let (v, f, b, na, sn, sc) = (v.clone(), f.clone(), b.clone(), na.clone(), sn.clone(), sc.clone());
             tokio::spawn(async move {
                 let mut buf = Vec::new();
                 let mut tmp = [0u8; 2048];
@@ -51,6 +55,11 @@ async fn serve(ranges: bool) -> Server {
                 }
                 let req = String::from_utf8_lossy(&buf).to_lowercase();
                 let header = |name: &str| req.lines().find_map(|l| l.strip_prefix(&format!("{name}: "))).map(str::to_owned);
+                if header("range").map(|r| r != "bytes=0-0").unwrap_or(false) {
+                    sc.lock()
+                        .unwrap()
+                        .push((header("host").unwrap_or_default(), header("authorization").is_some() || header("cookie").is_some()));
+                }
                 let want = na.lock().unwrap().clone();
                 if let Some(want) = want {
                     if header("authorization").as_deref() != Some(want.to_lowercase().as_str()) {
@@ -98,7 +107,7 @@ async fn serve(ranges: bool) -> Server {
             });
         }
     });
-    Server { port, version, fail_first, bytes_served, need_auth, stall_next }
+    Server { port, version, fail_first, bytes_served, need_auth, stall_next, seen }
 }
 
 fn silent() -> Arc<dyn Fn(Event) + Send + Sync> {
@@ -442,4 +451,21 @@ async fn a_mirror_that_fails_midway_does_not_break_the_download() {
     o.mirrors = vec![format!("http://127.0.0.1:{}/f.bin", b.port)];
     let path = download(o, CancellationToken::new(), silent()).await.unwrap();
     assert_eq!(std::fs::read(path).unwrap(), expected(0));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn credentials_are_not_sent_to_a_mirror_on_another_host() {
+    let s = serve(true).await;
+    // Same server, reached under a different host name: to the client that is another origin.
+    let mut o = Options::new(format!("http://127.0.0.1:{}/c.bin", s.port), tmp("leak"), two_routes());
+    o.conns_per_route = 2;
+    o.auth = Some(grabnr_core::Auth::Bearer("secret".into()));
+    o.headers.push(("Cookie".into(), "session=1".into()));
+    o.mirrors = vec![format!("http://localhost:{}/c.bin", s.port)];
+    let path = download(o, CancellationToken::new(), silent()).await.unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), expected(0));
+    let seen = s.seen.lock().unwrap().clone();
+    assert!(seen.iter().any(|(h, auth)| h.starts_with("127.0.0.1") && *auth), "the original host should get the credentials: {seen:?}");
+    let leaked: Vec<_> = seen.iter().filter(|(h, auth)| h.starts_with("localhost") && *auth).collect();
+    assert!(leaked.is_empty(), "credentials leaked to the mirror host: {leaked:?}");
 }
