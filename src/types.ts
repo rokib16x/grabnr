@@ -18,7 +18,10 @@ export type Item = {
 
 export type LinkRule = { share_pct: number; limit_kbps: number };
 
-export type AddOptions = { filename?: string; dir?: string; checksum?: string; username?: string; password?: string; token?: string; proxy?: string };
+export type AddOptions = { filename?: string; dir?: string; checksum?: string; username?: string; password?: string; token?: string; proxy?: string; mirrors?: string[] };
+
+export type BatchResult = { added: number; duplicates: number; skipped: number };
+export type PageLink = { url: string; text: string };
 
 export type AddResult = { id: string; duplicate: boolean };
 

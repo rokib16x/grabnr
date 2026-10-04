@@ -22,7 +22,7 @@ struct LinksResponse {
 }
 
 /// Optional extras for one download. Credentials are stored with the download and never sent back to the UI.
-#[derive(serde::Deserialize, Default)]
+#[derive(serde::Deserialize, Default, Clone)]
 struct AddOptions {
     filename: Option<String>,
     dir: Option<String>,
@@ -31,6 +31,7 @@ struct AddOptions {
     password: Option<String>,
     token: Option<String>,
     proxy: Option<String>,
+    mirrors: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -60,31 +61,103 @@ fn get_state(m: Mgr) -> AppState {
     AppState { downloads: m.list(), settings: m.settings(), api_port: manager::API_PORT, api_ok: *m.api_ok.lock().unwrap() }
 }
 
-#[tauri::command]
-fn add_download(m: Mgr, url: String, options: Option<AddOptions>) -> Result<AddResult, String> {
-    let o = options.unwrap_or_default();
-    let (filename, dir, checksum) = (o.filename, o.dir, o.checksum);
+/// Turn the form's extras into an `AddRequest` for one URL.
+fn build_request(url: String, o: &AddOptions) -> Result<AddRequest, String> {
     let url = url.trim().to_string();
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err("Enter a full http:// or https:// link".into());
     }
-    if let Some(c) = checksum.as_deref().filter(|c| !c.trim().is_empty()) {
+    if let Some(c) = o.checksum.as_deref().filter(|c| !c.trim().is_empty()) {
         grabnr_core::Checksum::parse(c).map_err(|e| e.to_string())?;
     }
-    let proxy = o.proxy.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+    let proxy = o.proxy.as_ref().map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
     if let Some(p) = &proxy {
         if !["http://", "https://", "socks5://", "socks5h://"].iter().any(|s| p.starts_with(s)) {
             return Err("The proxy must start with http://, https://, socks5:// or socks5h://".into());
         }
     }
     let mut headers = Vec::new();
-    if let Some(t) = o.token.filter(|t| !t.trim().is_empty()) {
+    if let Some(t) = o.token.as_ref().filter(|t| !t.trim().is_empty()) {
         headers.push(("Authorization".to_string(), grabnr_core::Auth::Bearer(t.trim().to_string()).header_value()));
-    } else if let Some(user) = o.username.filter(|u| !u.is_empty()) {
-        headers.push(("Authorization".to_string(), grabnr_core::Auth::Basic { user, pass: o.password.unwrap_or_default() }.header_value()));
+    } else if let Some(user) = o.username.as_ref().filter(|u| !u.is_empty()) {
+        headers.push(("Authorization".to_string(), grabnr_core::Auth::Basic { user: user.clone(), pass: o.password.clone().unwrap_or_default() }.header_value()));
     }
-    let (id, duplicate) = m.inner().add(AddRequest { url, filename, headers, dir, checksum, proxy });
+    let mirrors = o.mirrors.as_deref().map(grabnr_core::links::parse_url_list_from_vec).unwrap_or_default();
+    Ok(AddRequest { url, filename: o.filename.clone(), headers, dir: o.dir.clone(), checksum: o.checksum.clone(), proxy, mirrors })
+}
+
+/// A Metalink file stands for one download with several mirrors, a size and a hash.
+async fn expand_metalink(mut req: AddRequest) -> Result<AddRequest, String> {
+    if !grabnr_core::metalink::looks_like(&req.url, None) {
+        return Ok(req);
+    }
+    let (text, _) = grabnr_core::fetch::fetch_text(&req.url, &req.headers, req.proxy.as_deref(), 2 << 20).await.map_err(|e| e.to_string())?;
+    let m = grabnr_core::metalink::parse(&text).map_err(|e| e.to_string())?;
+    req.url = m.urls[0].clone();
+    req.mirrors.extend(m.urls.iter().skip(1).cloned());
+    if req.filename.as_deref().map_or(true, str::is_empty) && !m.name.is_empty() {
+        req.filename = Some(m.name.clone());
+    }
+    if req.checksum.as_deref().map_or(true, |c| c.trim().is_empty()) {
+        req.checksum = m.checksum().map(|c| c.spec());
+    }
+    Ok(req)
+}
+
+#[tauri::command]
+async fn add_download(m: Mgr<'_>, url: String, options: Option<AddOptions>) -> Result<AddResult, String> {
+    let req = expand_metalink(build_request(url, &options.unwrap_or_default())?).await?;
+    let (id, duplicate) = m.inner().add(req);
     Ok(AddResult { id, duplicate })
+}
+
+#[derive(Serialize)]
+struct BatchResult {
+    added: usize,
+    duplicates: usize,
+    /// Links that could not be added (for example an unreadable Metalink file).
+    skipped: usize,
+}
+
+/// Add every link in a pasted list (one per line).
+#[tauri::command]
+async fn add_batch(m: Mgr<'_>, text: String, options: Option<AddOptions>) -> Result<BatchResult, String> {
+    let urls = grabnr_core::links::parse_url_list(&text);
+    if urls.is_empty() {
+        return Err("No http or https links found".into());
+    }
+    let o = options.unwrap_or_default();
+    let (mut added, mut duplicates, mut skipped) = (0, 0, 0);
+    for u in urls {
+        // A batch ignores per-file names, hashes and mirrors: they belong to one file.
+        let one = AddOptions { filename: None, checksum: None, mirrors: None, ..o.clone() };
+        let Ok(req) = expand_metalink(build_request(u, &one)?).await else {
+            skipped += 1;
+            continue;
+        };
+        if m.inner().add(req).1 {
+            duplicates += 1;
+        } else {
+            added += 1;
+        }
+    }
+    Ok(BatchResult { added, duplicates, skipped })
+}
+
+/// Links found on a web page, for picking which files to download.
+#[tauri::command]
+async fn grab_links(m: Mgr<'_>, url: String) -> Result<Vec<grabnr_core::links::PageLink>, String> {
+    let url = url.trim().to_string();
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err("Enter a full http:// or https:// link".into());
+    }
+    let proxy = Some(m.settings().proxy).filter(|p| !p.is_empty());
+    let (html, _) = grabnr_core::fetch::fetch_text(&url, &[], proxy.as_deref(), 5 << 20).await.map_err(|e| e.to_string())?;
+    let links = grabnr_core::links::extract_links(&html, &url);
+    if links.is_empty() {
+        return Err("No links found on that page".into());
+    }
+    Ok(links)
 }
 
 #[tauri::command]
@@ -317,6 +390,8 @@ pub fn run() {
             get_links,
             get_state,
             add_download,
+            add_batch,
+            grab_links,
             move_download,
             pause_download,
             resume_download,

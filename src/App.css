@@ -161,7 +161,19 @@ html[data-mac="on"] .sidebar { padding-top: 54px; }
 .pill { margin-left: 6px; font-size: 11px; padding: 1px 7px; border-radius: 99px; background: var(--fill); color: var(--muted); }
 .pill.bound { color: var(--ok); } .pill.failed { color: var(--bad); }
 .url-field { display: flex; align-items: center; gap: 8px; padding: 0 12px; border: 1.5px solid var(--accent); border-radius: 10px; color: var(--accent); background: var(--surface); }
-.url-field input { border: 0; outline: none !important; padding: 10px 0; background: transparent; color: var(--text); }
+.url-field input, .url-field textarea { border: 0; outline: none; padding: 10px 0; background: transparent; color: var(--text); font: inherit; width: 100%; resize: none; user-select: text; -webkit-user-select: text; }
+.url-field { align-items: flex-start; } .url-field svg { margin-top: 12px; flex: none; }
+textarea.plain { font: inherit; color: inherit; width: 100%; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--btn-border); background: var(--surface); resize: vertical; user-select: text; -webkit-user-select: text; }
+.form-row.top { align-items: start; } .form-row.top > span { padding-top: 6px; }
+.search.wide { width: 100%; padding: 0 12px; }
+.pick-list { list-style: none; margin: 0; padding: 4px; max-height: 300px; overflow: auto; border-radius: 10px; background: var(--fill); display: grid; gap: 2px; }
+.pick-list label { display: flex; gap: 10px; align-items: center; padding: 6px 8px; border-radius: 8px; }
+.pick-list input[type=checkbox] { appearance: auto; width: 16px; height: 16px; border-radius: 4px; background: none; accent-color: var(--accent); }
+.pick-list input[type=checkbox]::after { content: none; }
+.pick-list label:hover { background: var(--fill); }
+.pick-text { display: grid; min-width: 0; } .pick-text b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick-text small { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sheet-actions .spacer { flex: 1; }
 .form-row { display: grid; grid-template-columns: 76px minmax(0, 1fr); align-items: center; gap: 10px; }
 .form-row > span { color: var(--muted); }
 .select { justify-content: flex-start; width: 100%; background: var(--fill); border: 0; box-shadow: none; padding: 7px 10px; }

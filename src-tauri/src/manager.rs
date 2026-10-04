@@ -50,6 +50,9 @@ pub struct Item {
     /// Proxy just for this download; may hold credentials, so it never reaches the UI.
     #[serde(default)]
     pub proxy: Option<String>,
+    /// Other URLs serving the same file (from the add dialog or a Metalink file).
+    #[serde(default)]
+    pub mirrors: Vec<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -153,6 +156,7 @@ pub struct AddRequest {
     pub dir: Option<String>,
     pub checksum: Option<String>,
     pub proxy: Option<String>,
+    pub mirrors: Vec<String>,
 }
 
 struct Inner {
@@ -345,6 +349,7 @@ impl Manager {
                     priority: 0,
                     retries: 0,
                     proxy: req.proxy.filter(|p| !p.trim().is_empty()),
+                    mirrors: req.mirrors,
                 },
             );
         }
@@ -530,6 +535,7 @@ impl Manager {
         let watcher = self.clone();
         opts.link_watch = Some(Arc::new(move || watcher.link_routes()));
         opts.speed_limit = (limit > 0).then(|| limit * 1024);
+        opts.mirrors = item.mirrors.clone();
         opts.proxy = item.proxy.clone().or_else(|| Some(global_proxy).filter(|p| !p.is_empty()));
         if let Some(c) = &item.checksum {
             match grabnr_core::Checksum::parse(c) {
@@ -679,7 +685,7 @@ mod tests {
     use super::*;
 
     fn item(id: &str, priority: i32, status: Status) -> Item {
-        Item { id: id.into(), url: format!("https://x/{id}"), filename: None, dir: ".".into(), headers: vec![], status, total: None, downloaded: 0, path: None, error: None, added: 0, checksum: None, priority, retries: 0, proxy: None }
+        Item { id: id.into(), url: format!("https://x/{id}"), filename: None, dir: ".".into(), headers: vec![], status, total: None, downloaded: 0, path: None, error: None, added: 0, checksum: None, priority, retries: 0, proxy: None, mirrors: vec![] }
     }
 
     #[test]

@@ -53,6 +53,16 @@ impl Checksum {
         Ok(Checksum { algo, hex })
     }
 
+    /// `sha256:<hex>`, the form `parse` accepts back.
+    pub fn spec(&self) -> String {
+        let a = match self.algo {
+            Algo::Md5 => "md5",
+            Algo::Sha1 => "sha1",
+            Algo::Sha256 => "sha256",
+        };
+        format!("{a}:{}", self.hex)
+    }
+
     pub fn label(&self) -> &'static str {
         match self.algo {
             Algo::Md5 => "MD5",

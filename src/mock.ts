@@ -87,6 +87,15 @@ export const mock = {
         setTimeout(() => run(it), 300);
         return { id: it.id, duplicate: false };
       }
+      case "add_batch": {
+        const urls = String(args.text).split(/\s+/).filter((u) => /^https?:\/\//.test(u));
+        urls.forEach((u) => { const it = seed(u.split("/").pop() || "download", 300e6, "queued", 0); handlers?.item({ ...it }); setTimeout(() => run(it), 300); });
+        return { added: urls.length, duplicates: 0, skipped: 0 };
+      }
+      case "grab_links": {
+        const base = String(args.url).replace(/\/[^/]*$/, "");
+        return ["release-1.0.zip", "release-1.1.zip", "manual.pdf", "demo.mp4", "notes.txt"].map((f) => ({ url: `${base}/${f}`, text: f }));
+      }
       case "move_download": { const it = items.find((i) => i.id === args.id); if (it) { it.priority += args.toFront ? 1 : -1; handlers?.item({ ...it }); } return; }
       case "pause_download": { const it = items.find((i) => i.id === args.id); if (it) { clearInterval(timers.get(it.id)); it.status = "paused"; handlers?.item({ ...it }); } return; }
       case "resume_download": { const it = items.find((i) => i.id === args.id); if (it) run(it); return; }

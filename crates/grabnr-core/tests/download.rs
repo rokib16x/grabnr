@@ -414,3 +414,28 @@ async fn recovers_from_connections_that_go_silent() {
     assert_eq!(std::fs::read(path).unwrap(), expected(0));
     assert!(t.elapsed() < std::time::Duration::from_secs(20), "took {:?}", t.elapsed());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn spreads_chunks_over_mirrors_and_skips_dead_ones() {
+    let a = serve(true).await;
+    let b = serve(true).await;
+    let mut o = Options::new(format!("http://127.0.0.1:{}/m.bin", a.port), tmp("mirrors"), two_routes());
+    o.conns_per_route = 2;
+    o.mirrors = vec![format!("http://127.0.0.1:{}/m.bin", b.port), "http://127.0.0.1:1/dead.bin".into()];
+    let path = download(o, CancellationToken::new(), silent()).await.unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), expected(0));
+    let (from_a, from_b) = (a.bytes_served.load(Ordering::Relaxed), b.bytes_served.load(Ordering::Relaxed));
+    assert!(from_a > 0 && from_b > 0, "both servers should have served data: a={from_a} b={from_b}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_mirror_that_fails_midway_does_not_break_the_download() {
+    let a = serve(true).await;
+    let b = serve(true).await;
+    b.fail_first.store(1000, Ordering::Relaxed); // every range request to the mirror gets a 503
+    let mut o = Options::new(format!("http://127.0.0.1:{}/f.bin", a.port), tmp("badmirror"), two_routes());
+    o.conns_per_route = 2;
+    o.mirrors = vec![format!("http://127.0.0.1:{}/f.bin", b.port)];
+    let path = download(o, CancellationToken::new(), silent()).await.unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), expected(0));
+}

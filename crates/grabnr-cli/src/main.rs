@@ -47,6 +47,9 @@ enum Cmd {
         /// Bearer token
         #[arg(long)]
         bearer: Option<String>,
+        /// Another URL for the same file (repeatable). A .meta4/.metalink URL adds its mirrors and hash by itself.
+        #[arg(long = "mirror")]
+        mirrors: Vec<String>,
     },
     /// Check that interface binding works and that links add up
     Spike {
@@ -84,7 +87,7 @@ async fn main() {
                 println!("warning: {a} and {b} share a gateway and will not add bandwidth");
             }
         }
-        Cmd::Get { url, out, only, conns, headers, limit, checksum, proxy, user, bearer } => {
+        Cmd::Get { url, out, only, conns, headers, limit, checksum, proxy, user, bearer, mirrors } => {
             let mut links = list_links();
             if !only.is_empty() {
                 links.retain(|l| only.contains(&l.name));
@@ -98,7 +101,24 @@ async fn main() {
 
             let db = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into())).join(".grabnr");
             std::fs::create_dir_all(&db).ok();
+            let (mut url, mut mirrors, mut meta_sum) = (url, mirrors, None);
+            if grabnr_core::metalink::looks_like(&url, None) {
+                let (text, _) = grabnr_core::fetch::fetch_text(&url, &[], proxy.as_deref(), 2 << 20).await.unwrap_or_else(|e| {
+                    eprintln!("could not read the Metalink file: {e}");
+                    std::process::exit(1);
+                });
+                let m = grabnr_core::metalink::parse(&text).unwrap_or_else(|e| {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                });
+                eprintln!("Metalink: {} with {} mirror(s)", m.name, m.urls.len());
+                mirrors.extend(m.urls.iter().skip(1).cloned());
+                meta_sum = m.checksum();
+                url = m.urls[0].clone();
+            }
             let mut opts = Options::new(url, out, routes);
+            opts.mirrors = mirrors;
+            opts.checksum = meta_sum;
             opts.conns_per_route = conns;
             // Cables and Wi-Fi can come and go mid-download; follow them (still limited to --only).
             let only_watch = only.clone();

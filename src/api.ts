@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { mock } from "./mock";
-import type { AddOptions, AddResult, AppState, EngineEvent, Item, LinksResponse, Settings, SpikeReport } from "./types";
+import type { AddOptions, AddResult, BatchResult, PageLink, AppState, EngineEvent, Item, LinksResponse, Settings, SpikeReport } from "./types";
 
 const native = "__TAURI_INTERNALS__" in window;
 const call = <T,>(cmd: string, args?: Record<string, unknown>) => (native ? invoke<T>(cmd, args) : (mock.call(cmd, args) as Promise<T>));
@@ -15,6 +15,8 @@ export const api = {
   resumeAll: () => call<void>("resume_all"),
   quit: () => call<void>("quit_app"),
   showMain: (settings = false) => call<void>("show_main_window", { settings }),
+  addBatch: (text: string, options?: AddOptions) => call<BatchResult>("add_batch", { text, options: options ?? null }),
+  grabLinks: (url: string) => call<PageLink[]>("grab_links", { url }),
   move: (id: string, toFront: boolean) => call<void>("move_download", { id, toFront }),
   pause: (id: string) => call<void>("pause_download", { id }),
   resume: (id: string) => call<void>("resume_download", { id }),

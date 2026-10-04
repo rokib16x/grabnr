@@ -91,6 +91,8 @@ pub struct Options {
     pub revive_after: Duration,
     /// With no working link at all, wait this long for one to come back before failing.
     pub no_link_grace: Duration,
+    /// Other URLs for the same file. Mirrors that do not report the same size (or lack range support) are ignored.
+    pub mirrors: Vec<String>,
 }
 
 impl Options {
@@ -115,6 +117,7 @@ impl Options {
             stall_timeout: Duration::from_secs(30),
             revive_after: Duration::from_secs(10),
             no_link_grace: Duration::from_secs(30),
+            mirrors: Vec::new(),
         }
     }
 }
@@ -230,7 +233,8 @@ impl Shared {
 }
 
 struct Ctx {
-    url: String,
+    /// The file's URLs, primary first. Workers spread over them and move on when one fails.
+    urls: Vec<String>,
     headers: HeaderMap,
     validator: Option<String>,
     sched: Scheduler,
@@ -372,8 +376,9 @@ async fn ranged(
 
     emit(Event::Started { filename: filename.into(), total: Some(total), chunks: ranges.len(), ranges: true, resumed_chunks: done.len() });
 
+    let urls = usable_urls(opts, probe, &clients).await;
     let ctx = Arc::new(Ctx {
-        url: probe.final_url.clone(),
+        urls,
         headers: opts.headers.iter().fold(HeaderMap::new(), |mut m, (k, v)| {
             if let (Ok(k), Ok(v)) = (HeaderName::from_bytes(k.as_bytes()), HeaderValue::from_str(v)) {
                 m.insert(k, v);
@@ -603,6 +608,8 @@ fn restart_route(ctx: &Arc<Ctx>, opts: &Options, def: &mut Route, client: &mut C
 
 async fn worker(ctx: Arc<Ctx>, route: usize, wid: usize, client: Client, rs: Arc<RouteState>) {
     let mut fails = 0u32;
+    // Spread connections over the mirrors; a failing URL passes the baton to the next one.
+    let mut url_idx = (route + wid) % ctx.urls.len();
     loop {
         if ctx.abort.is_cancelled() || rs.stop.is_cancelled() || ctx.sched.finished() {
             break;
@@ -621,7 +628,7 @@ async fn worker(ctx: Arc<Ctx>, route: usize, wid: usize, client: Client, rs: Arc
             Lease::Chunk { idx, start, end, .. } => (idx, start, end),
         };
         rs.active.fetch_add(1, Ordering::Relaxed);
-        let r = fetch_chunk(&ctx, &client, route, &rs, idx, start, end).await;
+        let r = fetch_chunk(&ctx, &client, route, &rs, url_idx, idx, start, end).await;
         rs.active.fetch_sub(1, Ordering::Relaxed);
         match r {
             Ok(Outcome::Won) => fails = 0,
@@ -638,6 +645,7 @@ async fn worker(ctx: Arc<Ctx>, route: usize, wid: usize, client: Client, rs: Arc
                 break;
             }
             Err(FetchErr::Throttled(code)) => {
+                url_idx = (url_idx + 1) % ctx.urls.len();
                 let attempts = ctx.sched.release(idx, true);
                 *ctx.last_err.lock().unwrap() = format!("server throttled with HTTP {code}");
                 if attempts >= ctx.max_attempts {
@@ -658,6 +666,7 @@ async fn worker(ctx: Arc<Ctx>, route: usize, wid: usize, client: Client, rs: Arc
                 sleep_or_stop(&rs, backoff(fails)).await;
             }
             Err(FetchErr::Retry(msg)) => {
+                url_idx = (url_idx + 1) % ctx.urls.len();
                 let attempts = ctx.sched.release(idx, true);
                 *ctx.last_err.lock().unwrap() = msg.clone();
                 if attempts >= ctx.max_attempts {
@@ -689,9 +698,11 @@ async fn sleep_or_stop(rs: &RouteState, d: Duration) {
     }
 }
 
-async fn fetch_chunk(ctx: &Ctx, client: &Client, route: usize, rs: &RouteState, idx: usize, start: u64, end: u64) -> std::result::Result<Outcome, FetchErr> {
-    let mut req = client.get(&ctx.url).headers(ctx.headers.clone()).header(RANGE, format!("bytes={start}-{end}"));
-    if let Some(v) = &ctx.validator {
+async fn fetch_chunk(ctx: &Ctx, client: &Client, route: usize, rs: &RouteState, url_idx: usize, idx: usize, start: u64, end: u64) -> std::result::Result<Outcome, FetchErr> {
+    let mirror = url_idx != 0;
+    let mut req = client.get(&ctx.urls[url_idx]).headers(ctx.headers.clone()).header(RANGE, format!("bytes={start}-{end}"));
+    // The validator belongs to the primary URL; a mirror may have different ETags for identical bytes.
+    if let (Some(v), false) = (&ctx.validator, mirror) {
         req = req.header(IF_RANGE, v);
     }
     let resp = tokio::select! {
@@ -703,12 +714,14 @@ async fn fetch_chunk(ctx: &Ctx, client: &Client, route: usize, rs: &RouteState, 
     };
     match resp.status() {
         StatusCode::PARTIAL_CONTENT => {}
-        // We asked for a range and got the whole file: If-Range failed, so the file changed.
+        // A mirror that ignores ranges is just a bad mirror; on the primary it means the file changed.
+        StatusCode::OK if mirror => return Err(FetchErr::Retry("mirror ignored the range request".into())),
         StatusCode::OK => return Err(FetchErr::Fatal(Error::FileChanged)),
         s @ (StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE | StatusCode::FORBIDDEN) => {
             return Err(FetchErr::Throttled(s.as_u16()))
         }
         s if s.is_server_error() => return Err(FetchErr::Retry(format!("HTTP {s}"))),
+        s if mirror => return Err(FetchErr::Retry(format!("mirror answered HTTP {s}"))),
         s => return Err(FetchErr::Fatal(Error::Status(s.as_u16()))),
     }
 
@@ -872,4 +885,28 @@ fn spawn_ramp(shared: Arc<Shared>, interval: Duration) -> tokio::task::JoinHandl
 
 fn max_conns(opts: &Options, r: &Route) -> usize {
     r.max_conns.unwrap_or(opts.conns_per_route).max(1)
+}
+
+/// The primary URL plus every mirror that serves the same bytes (same size, range support).
+async fn usable_urls(opts: &Options, primary: &Probe, clients: &[Client]) -> Vec<String> {
+    let mut urls = vec![primary.final_url.clone()];
+    let Some(client) = clients.first() else { return urls };
+    let headers: HeaderMap = opts.headers.iter().fold(HeaderMap::new(), |mut m, (k, v)| {
+        if let (Ok(k), Ok(v)) = (HeaderName::from_bytes(k.as_bytes()), HeaderValue::from_str(v)) {
+            m.insert(k, v);
+        }
+        m
+    });
+    for m in &opts.mirrors {
+        if m == &opts.url || urls.contains(m) {
+            continue;
+        }
+        let ok = tokio::time::timeout(Duration::from_secs(10), probe(client, m, &headers)).await;
+        if let Ok(Ok(p)) = ok {
+            if p.ranges && p.total == primary.total {
+                urls.push(p.final_url);
+            }
+        }
+    }
+    urls
 }
