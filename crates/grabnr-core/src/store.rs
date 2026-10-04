@@ -20,6 +20,16 @@ pub struct Record {
 /// A finished chunk: its index and the CRC-32 of its bytes (none for databases from before checksums were stored).
 pub type DoneChunk = (usize, Option<u32>);
 
+/// Part of a chunk already on disk: how many bytes from its start, and their CRC-32.
+pub type PartialChunk = (usize, u64, u32);
+
+/// What was saved about a download: finished chunks and partly finished ones.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Saved {
+    pub done: Vec<DoneChunk>,
+    pub partial: Vec<PartialChunk>,
+}
+
 pub struct Store(Mutex<Connection>);
 
 impl Store {
@@ -37,6 +47,8 @@ impl Store {
              CREATE TABLE IF NOT EXISTS downloads(
                id TEXT PRIMARY KEY, url TEXT NOT NULL, total INTEGER NOT NULL,
                etag TEXT, last_modified TEXT, chunk_size INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS partial_chunks(
+               id TEXT NOT NULL, idx INTEGER NOT NULL, len INTEGER NOT NULL, crc INTEGER NOT NULL, PRIMARY KEY(id, idx));
              CREATE TABLE IF NOT EXISTS done_chunks(
                id TEXT NOT NULL, idx INTEGER NOT NULL, crc INTEGER, PRIMARY KEY(id, idx));",
         )?;
@@ -49,7 +61,7 @@ impl Store {
     }
 
     /// The record and the finished chunks as `(index, CRC-32 of its bytes)`. A chunk without a checksum cannot be verified.
-    pub fn load(&self, id: &str) -> Result<Option<(Record, Vec<DoneChunk>)>> {
+    pub fn load(&self, id: &str) -> Result<Option<(Record, Saved)>> {
         let c = self.0.lock().unwrap();
         let rec = c
             .query_row("SELECT id,url,total,etag,last_modified,chunk_size FROM downloads WHERE id=?1", [id], |r| {
@@ -68,13 +80,18 @@ impl Store {
         let done = stmt
             .query_map([id], |r| Ok((r.get::<_, i64>(0)? as usize, r.get::<_, Option<i64>>(1)?.map(|v| v as u32))))?
             .collect::<std::result::Result<_, _>>()?;
-        Ok(Some((rec, done)))
+        let mut stmt = c.prepare("SELECT idx, len, crc FROM partial_chunks WHERE id=?1 ORDER BY idx")?;
+        let partial = stmt
+            .query_map([id], |r| Ok((r.get::<_, i64>(0)? as usize, r.get::<_, i64>(1)? as u64, r.get::<_, i64>(2)? as u32)))?
+            .collect::<std::result::Result<_, _>>()?;
+        Ok(Some((rec, Saved { done, partial })))
     }
 
     /// Start (or restart) a download: replaces any previous record and its chunks.
     pub fn begin(&self, rec: &Record) -> Result<()> {
         let c = self.0.lock().unwrap();
         c.execute("DELETE FROM done_chunks WHERE id=?1", [&rec.id])?;
+        c.execute("DELETE FROM partial_chunks WHERE id=?1", [&rec.id])?;
         c.execute(
             "INSERT OR REPLACE INTO downloads(id,url,total,etag,last_modified,chunk_size) VALUES(?1,?2,?3,?4,?5,?6)",
             params![rec.id, rec.url, rec.total as i64, rec.etag, rec.last_modified, rec.chunk_size as i64],
@@ -83,10 +100,27 @@ impl Store {
     }
 
     pub fn mark_done(&self, id: &str, idx: usize, crc: u32) -> Result<()> {
-        self.0
-            .lock()
-            .unwrap()
-            .execute("INSERT OR REPLACE INTO done_chunks(id,idx,crc) VALUES(?1,?2,?3)", params![id, idx as i64, crc as i64])?;
+        let c = self.0.lock().unwrap();
+        c.execute("INSERT OR REPLACE INTO done_chunks(id,idx,crc) VALUES(?1,?2,?3)", params![id, idx as i64, crc as i64])?;
+        c.execute("DELETE FROM partial_chunks WHERE id=?1 AND idx=?2", params![id, idx as i64])?;
+        Ok(())
+    }
+
+    /// Remember how far a chunk got, so a later run can continue inside it.
+    pub fn set_partial(&self, id: &str, idx: usize, len: u64, crc: u32) -> Result<()> {
+        self.0.lock().unwrap().execute(
+            "INSERT OR REPLACE INTO partial_chunks(id,idx,len,crc) VALUES(?1,?2,?3,?4)",
+            params![id, idx as i64, len as i64, crc as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Drop saved partial progress that turned out damaged.
+    pub fn forget_partial(&self, id: &str, idxs: &[usize]) -> Result<()> {
+        let c = self.0.lock().unwrap();
+        for i in idxs {
+            c.execute("DELETE FROM partial_chunks WHERE id=?1 AND idx=?2", params![id, *i as i64])?;
+        }
         Ok(())
     }
 
@@ -102,6 +136,7 @@ impl Store {
     pub fn delete(&self, id: &str) -> Result<()> {
         let c = self.0.lock().unwrap();
         c.execute("DELETE FROM done_chunks WHERE id=?1", [id])?;
+        c.execute("DELETE FROM partial_chunks WHERE id=?1", [id])?;
         c.execute("DELETE FROM downloads WHERE id=?1", [id])?;
         Ok(())
     }
@@ -121,9 +156,9 @@ mod tests {
         s.begin(&rec()).unwrap();
         s.mark_done("d", 0, 0xDEADBEEF).unwrap();
         s.mark_done("d", 1, 7).unwrap();
-        assert_eq!(s.load("d").unwrap().unwrap().1, vec![(0, Some(0xDEADBEEF)), (1, Some(7))]);
+        assert_eq!(s.load("d").unwrap().unwrap().1.done, vec![(0, Some(0xDEADBEEF)), (1, Some(7))]);
         s.forget("d", &[0]).unwrap();
-        assert_eq!(s.load("d").unwrap().unwrap().1, vec![(1, Some(7))]);
+        assert_eq!(s.load("d").unwrap().unwrap().1.done, vec![(1, Some(7))]);
     }
 
     #[test]
@@ -142,8 +177,22 @@ mod tests {
             .unwrap();
         }
         let s = Store::open(&path).unwrap();
-        assert_eq!(s.load("d").unwrap().unwrap().1, vec![(0, None)]);
+        assert_eq!(s.load("d").unwrap().unwrap().1.done, vec![(0, None)]);
         s.mark_done("d", 1, 9).unwrap();
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn partial_progress_is_saved_replaced_and_cleared_on_completion() {
+        let s = Store::in_memory().unwrap();
+        s.begin(&rec()).unwrap();
+        s.set_partial("d", 1, 100, 5).unwrap();
+        s.set_partial("d", 1, 250, 6).unwrap();
+        assert_eq!(s.load("d").unwrap().unwrap().1.partial, vec![(1, 250, 6)]);
+        s.mark_done("d", 1, 9).unwrap();
+        assert!(s.load("d").unwrap().unwrap().1.partial.is_empty(), "a finished chunk has no partial");
+        s.set_partial("d", 0, 10, 1).unwrap();
+        s.forget_partial("d", &[0]).unwrap();
+        assert!(s.load("d").unwrap().unwrap().1.partial.is_empty());
     }
 }

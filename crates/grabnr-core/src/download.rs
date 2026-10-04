@@ -22,7 +22,7 @@ use crate::interfaces::Link;
 use crate::limiter::Limiter;
 use crate::probe::{probe, sanitize, Probe};
 use crate::scheduler::{chunk_size_for, plan, Lease, Scheduler};
-use crate::store::{DoneChunk, Record, Store};
+use crate::store::{DoneChunk, PartialChunk, Record, Store};
 use crate::writer::OffsetFile;
 
 /// A path a worker can take to the internet: a bound link, or the OS default.
@@ -189,6 +189,8 @@ pub enum Event {
 pub type Emit = Arc<dyn Fn(Event) + Send + Sync>;
 
 const LINK_FAIL_LIMIT: u32 = 5;
+/// How much a fetch writes before it saves its progress inside the chunk.
+const CHECKPOINT: u64 = 1 << 20;
 
 struct RouteState {
     name: String,
@@ -247,7 +249,10 @@ impl Drop for WorkerGuard {
 
 struct Shared {
     total: Option<u64>,
-    global: AtomicU64,
+    /// Bytes safely on disk: finished chunks plus the saved part of unfinished ones.
+    settled: AtomicU64,
+    /// Bytes written by fetches still in progress, not yet settled.
+    inflight: AtomicU64,
     /// Append-only: a link keeps its index for the whole download, so chunk and stat indices stay valid.
     routes: RwLock<Vec<Arc<RouteState>>>,
     limit: Option<Arc<Limiter>>,
@@ -346,7 +351,8 @@ pub async fn download(mut opts: Options, cancel: CancellationToken, emit: Emit) 
 
     let shared = Arc::new(Shared {
         total: probe.total,
-        global: AtomicU64::new(0),
+        settled: AtomicU64::new(0),
+        inflight: AtomicU64::new(0),
         routes: RwLock::new(opts.routes.iter().map(|r| Arc::new(RouteState::new(r, &opts, 0, cancel.child_token()))).collect()),
         limit: opts.shared_limit.clone().or_else(|| opts.speed_limit.map(|r| Arc::new(Limiter::new(r)))),
     });
@@ -374,6 +380,7 @@ async fn ranged(
     let id = opts.resume_key.clone().unwrap_or_else(|| format!("{}|{}", opts.url, staging.display()));
     let mut chunk_size = chunk_size_for(total, opts.routes.len());
     let mut done_raw: Vec<DoneChunk> = Vec::new();
+    let mut partial_raw: Vec<PartialChunk> = Vec::new();
 
     let fresh = Record {
         id: id.clone(),
@@ -391,7 +398,8 @@ async fn ranged(
                 && std::fs::metadata(staging).map(|m| m.len() == total).unwrap_or(false) =>
         {
             chunk_size = rec.chunk_size;
-            done_raw = d;
+            done_raw = d.done;
+            partial_raw = d.partial;
         }
         prev => {
             if prev.is_some() {
@@ -408,23 +416,25 @@ async fn ranged(
     // Trust nothing from the last run: re-read every finished piece and compare it with the checksum saved when it
     // completed. This catches a crash or power loss that left a piece marked done but never written, and any edit
     // to the partial file. Damaged pieces are simply downloaded again.
-    let done: Vec<usize> = if done_raw.is_empty() {
-        Vec::new()
+    let (done, partials): (Vec<usize>, Vec<(usize, u64, u32)>) = if done_raw.is_empty() && partial_raw.is_empty() {
+        (Vec::new(), Vec::new())
     } else {
-        let (path, rs, raw) = (staging.to_path_buf(), ranges.clone(), done_raw.clone());
-        let checked = raw.len();
-        let (good, bad) =
-            tokio::task::spawn_blocking(move || verify_done(&path, &rs, &raw)).await.map_err(|e| Error::Other(e.to_string()))?;
-        if !bad.is_empty() {
-            if let Some(s) = &opts.store {
-                s.forget(&id, &bad)?;
-            }
+        let (path, rs, raw_done, raw_part) = (staging.to_path_buf(), ranges.clone(), done_raw.clone(), partial_raw.clone());
+        let checked = raw_done.len() + raw_part.len();
+        let ((good, bad), (part_ok, part_bad)) =
+            tokio::task::spawn_blocking(move || (verify_done(&path, &rs, &raw_done), verify_partial(&path, &rs, &raw_part)))
+                .await
+                .map_err(|e| Error::Other(e.to_string()))?;
+        if let Some(s) = &opts.store {
+            s.forget(&id, &bad)?;
+            s.forget_partial(&id, &part_bad)?;
         }
-        emit(Event::ResumeChecked { checked, redo: bad.len() });
-        good
+        emit(Event::ResumeChecked { checked, redo: bad.len() + part_bad.len() });
+        (good, part_ok)
     };
-    let resumed_bytes: u64 = done.iter().filter_map(|&i| ranges.get(i)).map(|&(s, e)| e - s + 1).sum();
-    shared.global.store(resumed_bytes, Ordering::Relaxed);
+    let sched = Scheduler::new(ranges.clone(), &done).with_have(&partials);
+    let resumed_bytes = sched.settled();
+    shared.settled.store(resumed_bytes, Ordering::Relaxed);
     disk::ensure_space(&opts.dest_dir, total.saturating_sub(resumed_bytes))?;
     let file = OffsetFile::open_staging(staging, total)?;
 
@@ -435,7 +445,7 @@ async fn ranged(
         headers: urls.iter().map(|u| headers_for(&opts.headers, &opts.url, u)).collect(),
         urls,
         validator: probe.validator().map(str::to_owned),
-        sched: Scheduler::new(ranges, &done),
+        sched,
         file,
         store: opts.store.clone(),
         id: id.clone(),
@@ -513,7 +523,7 @@ async fn single(
                         }
                         file.write_all_at(&b, pos)?;
                         pos += b.len() as u64;
-                        shared.global.fetch_add(b.len() as u64, Ordering::Relaxed);
+                        shared.settled.fetch_add(b.len() as u64, Ordering::Relaxed);
                         shared.route(0).bytes.fetch_add(b.len() as u64, Ordering::Relaxed);
                     }
                     Some(Err(e)) => return Err(e.into()),
@@ -760,7 +770,10 @@ async fn fetch_chunk(
     end: u64,
 ) -> std::result::Result<Outcome, FetchErr> {
     let mirror = url_idx != 0;
-    let mut req = client.get(&ctx.urls[url_idx]).headers(ctx.headers[url_idx].clone()).header(RANGE, format!("bytes={start}-{end}"));
+    // Carry on from where an earlier attempt (or an earlier run) stopped inside this chunk.
+    let (have, seed_crc) = ctx.sched.have(idx);
+    let from = start + have;
+    let mut req = client.get(&ctx.urls[url_idx]).headers(ctx.headers[url_idx].clone()).header(RANGE, format!("bytes={from}-{end}"));
     // The validator belongs to the primary URL; a mirror may have different ETags for identical bytes.
     if let (Some(v), false) = (&ctx.validator, mirror) {
         req = req.header(IF_RANGE, v);
@@ -786,21 +799,34 @@ async fn fetch_chunk(
     }
 
     let mut stream = resp.bytes_stream();
-    let (mut pos, mut got) = (start, 0u64);
-    let mut crc = crc32fast::Hasher::new();
-    let rollback = |got: u64| {
-        ctx.shared.global.fetch_sub(got, Ordering::Relaxed);
+    let (mut pos, mut got) = (from, 0u64);
+    let mut crc = crc32fast::Hasher::new_with_initial_len(seed_crc, have);
+    let mut last_saved = 0u64;
+    // A fetch that stops early keeps what it wrote when it is the only one on the chunk, so the next attempt (or run)
+    // continues there. Otherwise its bytes are given up and the chunk is fetched in full by whoever wins.
+    let stop = |got: u64, crc: &crc32fast::Hasher| {
+        ctx.shared.inflight.fetch_sub(got, Ordering::Relaxed);
+        if got == 0 {
+            return;
+        }
+        let sum = crc.clone().finalize();
+        if let Some(delta) = ctx.sched.set_have(idx, have + got, sum) {
+            ctx.shared.settled.fetch_add(delta, Ordering::Relaxed);
+            if let Some(s) = &ctx.store {
+                let _ = s.set_partial(&ctx.id, idx, have + got, sum);
+            }
+        }
     };
     while pos <= end {
         let next = tokio::select! {
-            _ = rs.stop.cancelled() => { rollback(got); return Err(FetchErr::Cancelled) }
+            _ = rs.stop.cancelled() => { stop(got, &crc); return Err(FetchErr::Cancelled) }
             n = tokio::time::timeout(ctx.stall_timeout, stream.next()) => match n {
                 Ok(n) => n,
-                Err(_) => { rollback(got); return Err(FetchErr::Retry("the connection stalled".into())) }
+                Err(_) => { stop(got, &crc); return Err(FetchErr::Retry("the connection stalled".into())) }
             },
         };
         if ctx.sched.is_done(idx) {
-            rollback(got);
+            ctx.shared.inflight.fetch_sub(got, Ordering::Relaxed);
             return Ok(Outcome::Lost);
         }
         match next {
@@ -813,52 +839,64 @@ async fn fetch_chunk(
                     l.acquire(take as u64).await;
                 }
                 if let Err(e) = ctx.file.write_all_at(&b[..take], pos) {
-                    rollback(got);
+                    ctx.shared.inflight.fetch_sub(got, Ordering::Relaxed);
                     return Err(FetchErr::Fatal(e.into()));
                 }
                 crc.update(&b[..take]);
                 pos += take as u64;
                 got += take as u64;
                 rs.bytes.fetch_add(take as u64, Ordering::Relaxed);
-                ctx.shared.global.fetch_add(take as u64, Ordering::Relaxed);
+                ctx.shared.inflight.fetch_add(take as u64, Ordering::Relaxed);
+                // Checkpoint about every MiB so even a crash loses little; the saved part is re-checked on resume.
+                if got - last_saved >= CHECKPOINT && pos <= end {
+                    last_saved = got;
+                    let sum = crc.clone().finalize();
+                    if let Some(delta) = ctx.sched.set_have(idx, have + got, sum) {
+                        ctx.shared.settled.fetch_add(delta, Ordering::Relaxed);
+                        ctx.shared.inflight.fetch_sub(delta, Ordering::Relaxed);
+                        if let Some(s) = &ctx.store {
+                            let _ = s.set_partial(&ctx.id, idx, have + got, sum);
+                        }
+                    }
+                }
             }
             Some(Err(e)) => {
-                rollback(got);
+                stop(got, &crc);
                 return Err(FetchErr::Retry(e.to_string()));
             }
             None => {
-                rollback(got);
+                stop(got, &crc);
                 return Err(FetchErr::Retry("connection closed before the chunk finished".into()));
             }
         }
     }
 
-    let crc = crc.finalize();
-    if ctx.sched.complete(idx) {
-        if let Some(s) = &ctx.store {
-            if let Err(e) = s.mark_done(&ctx.id, idx, crc) {
-                return Err(FetchErr::Fatal(e));
+    let sum = crc.finalize();
+    ctx.shared.inflight.fetch_sub(got, Ordering::Relaxed);
+    match ctx.sched.complete(idx) {
+        Some(delta) => {
+            ctx.shared.settled.fetch_add(delta, Ordering::Relaxed);
+            // The checksum covers the whole chunk, including the part fetched in an earlier attempt.
+            if let Some(s) = &ctx.store {
+                if let Err(e) = s.mark_done(&ctx.id, idx, sum) {
+                    return Err(FetchErr::Fatal(e));
+                }
             }
+            (ctx.emit)(Event::ChunkDone { idx, route });
+            Ok(Outcome::Won)
         }
-        (ctx.emit)(Event::ChunkDone { idx, route });
-        Ok(Outcome::Won)
-    } else {
-        rollback(got);
-        Ok(Outcome::Lost)
+        None => Ok(Outcome::Lost),
     }
 }
 
 fn spawn_ticker(shared: Arc<Shared>, emit: Emit) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let tick = Duration::from_millis(250);
-        let mut last_global = shared.global.load(Ordering::Relaxed);
-        let (mut ema, mut last_routes, mut route_ema): (f64, Vec<u64>, Vec<f64>) = (0.0, Vec::new(), Vec::new());
+        let (mut last_routes, mut route_ema): (Vec<u64>, Vec<f64>) = (Vec::new(), Vec::new());
         loop {
             tokio::time::sleep(tick).await;
             let secs = tick.as_secs_f64();
-            let g = shared.global.load(Ordering::Relaxed);
-            ema = 0.5 * ema + 0.5 * (g.saturating_sub(last_global) as f64 / secs);
-            last_global = g;
+            let g = shared.settled.load(Ordering::Relaxed) + shared.inflight.load(Ordering::Relaxed);
             let states = shared.all();
             while last_routes.len() < states.len() {
                 last_routes.push(states[last_routes.len()].bytes.load(Ordering::Relaxed));
@@ -881,7 +919,8 @@ fn spawn_ticker(shared: Arc<Shared>, emit: Emit) -> tokio::task::JoinHandle<()> 
                     }
                 })
                 .collect();
-            // A raced duplicate counts until the losing copy aborts; never report more than the file size.
+            let ema: f64 = route_ema.iter().sum();
+            // Raced duplicates count while in flight; never report more than the file size.
             let shown = shared.total.map_or(g, |t| g.min(t));
             emit(Event::Progress(Snapshot { downloaded: shown, total: shared.total, bytes_per_sec: ema, routes }));
         }
@@ -1023,6 +1062,45 @@ fn verify_done(path: &Path, ranges: &[(u64, u64)], done: &[DoneChunk]) -> (Vec<u
             };
         if ok && h.finalize() == want {
             good.push(idx);
+        } else {
+            bad.push(idx);
+        }
+    }
+    (good, bad)
+}
+
+/// Check partly downloaded chunks against the checksum saved with them. Returns the ones still good as
+/// `(index, bytes, crc)` and the indexes of the damaged ones.
+fn verify_partial(path: &Path, ranges: &[(u64, u64)], partial: &[PartialChunk]) -> (Vec<(usize, u64, u32)>, Vec<usize>) {
+    use std::io::{Read, Seek, SeekFrom};
+    let (mut good, mut bad) = (Vec::new(), Vec::new());
+    let Ok(mut f) = std::fs::File::open(path) else { return (good, partial.iter().map(|p| p.0).collect()) };
+    let mut buf = vec![0u8; 1 << 20];
+    for &(idx, len, want) in partial {
+        let Some(&(start, end)) = ranges.get(idx) else {
+            bad.push(idx);
+            continue;
+        };
+        if len == 0 || len > end - start {
+            bad.push(idx);
+            continue;
+        }
+        let mut h = crc32fast::Hasher::new();
+        let mut left = len;
+        let ok = f.seek(SeekFrom::Start(start)).is_ok()
+            && loop {
+                if left == 0 {
+                    break true;
+                }
+                let n = (buf.len() as u64).min(left) as usize;
+                if f.read_exact(&mut buf[..n]).is_err() {
+                    break false;
+                }
+                h.update(&buf[..n]);
+                left -= n as u64;
+            };
+        if ok && h.finalize() == want {
+            good.push((idx, len, want));
         } else {
             bad.push(idx);
         }

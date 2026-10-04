@@ -10,7 +10,7 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 - **Sources:** mirrors, Metalink (`.meta4`, `.metalink`), batch link lists, a page link picker, per-download sign-in (Basic, Bearer) and proxies (HTTP, HTTPS, SOCKS5).
 - **Queue:** "Download next / last" priority, drag-to-reorder, duplicate detection.
 - **Integrations:** a webhook for finished and failed downloads, `grabnr://add?url=` links, a macOS quarantine flag on finished files, thumbnails in the inspector, settings and link-list export/import, a copyable diagnostics report.
-- **Resume:** finished pieces are checked by checksum when a download resumes, so a crash or power loss can no longer leave silent holes in the file; a replaced link keeps its progress (Change link…).
+- **Resume:** progress inside a piece is saved and continued after a pause or crash, so nothing but the last MiB is ever fetched twice; finished pieces are checked by checksum when a download resumes, so a crash or power loss can no longer leave silent holes in the file; a replaced link keeps its progress (Change link…).
 - **Security:** optional Keychain storage for credentials.
 - **Schedule:** rules that hold downloads, cap the speed or lift the cap by day and hour; an action to run when all downloads finish (sleep, quit or a command).
 - **App:** macOS-style window with sidebar, categories, sorting, inspector, History with statistics and CSV export, drag and drop, first-run onboarding, command palette, menu bar popover, Dock progress, notification sound.

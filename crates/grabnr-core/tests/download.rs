@@ -625,3 +625,139 @@ async fn a_replaced_link_resumes_the_same_partial_file() {
     assert_eq!(std::fs::read(path).unwrap(), expected(0));
     assert!(resumed.load(Ordering::Relaxed) >= 2, "the new link should keep the chunks already on disk");
 }
+
+/// One link with one connection: pieces are fetched one at a time and nothing is raced, so byte counts are exact.
+fn single_link(url: &str, dir: &std::path::Path, store: &Arc<Store>) -> Options {
+    let mut o = Options::new(url, dir, vec![Route::unbound("a")]);
+    o.conns_per_route = 1;
+    o.store = Some(store.clone());
+    o
+}
+
+fn key(url: &str, dir: &std::path::Path, name: &str) -> String {
+    format!("{url}|{}", dir.join(name).display())
+}
+
+fn crc(data: &[u8]) -> u32 {
+    let mut h = crc32fast::Hasher::new();
+    h.update(data);
+    h.finalize()
+}
+
+/// Leave the world as an interrupted download would: piece 0 finished, piece 1 written up to `kept` bytes and saved
+/// as partial. Returns the size of a piece.
+async fn interrupted_state(url: &str, dir: &std::path::Path, store: &Arc<Store>, name: &str, kept: u64) -> u64 {
+    assert!(matches!(cancel_after_chunks(single_link(url, dir, store), 1).await, Error::Cancelled));
+    let k = key(url, dir, name);
+    let (rec, saved) = store.load(&k).unwrap().unwrap();
+    let chunk = rec.chunk_size;
+    // Whatever else the cancelled run managed to finish, forget it: the state below is the only progress.
+    let others: Vec<usize> = saved.done.iter().map(|d| d.0).filter(|&i| i != 0).collect();
+    store.forget(&k, &others).unwrap();
+    store.forget_partial(&k, &[1]).unwrap();
+    let staging = dir.join(name);
+    let mut file = std::fs::read(&staging).unwrap();
+    let want = expected(0);
+    // Data after piece 0 is whatever the cancelled run left; make piece 1 hold exactly `kept` good bytes, the rest zero.
+    file[chunk as usize..2 * chunk as usize].fill(0);
+    file[chunk as usize..(chunk + kept) as usize].copy_from_slice(&want[chunk as usize..(chunk + kept) as usize]);
+    std::fs::write(&staging, &file).unwrap();
+    store.set_partial(&k, 1, kept, crc(&want[chunk as usize..(chunk + kept) as usize])).unwrap();
+    chunk
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resumes_inside_a_piece_instead_of_refetching_it() {
+    let s = serve(true).await;
+    let dir = tmp("inpiece");
+    let store = Arc::new(Store::in_memory().unwrap());
+    let url = format!("http://127.0.0.1:{}/p.bin", s.port);
+    let kept = 600_000;
+    let chunk = interrupted_state(&url, &dir, &store, "p.bin.grabnr", kept).await;
+    let on_disk = chunk + kept; // piece 0 in full plus the saved part of piece 1
+
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await; // let the server finish what it had queued
+    let before = s.bytes_served.load(Ordering::Relaxed);
+    let (checked, redo) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(99)));
+    let (max_shown, first_shown) = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(u64::MAX)));
+    let (c, r, m, f) = (checked.clone(), redo.clone(), max_shown.clone(), first_shown.clone());
+    let emit: Arc<dyn Fn(Event) + Send + Sync> = Arc::new(move |e| match e {
+        Event::ResumeChecked { checked, redo } => {
+            c.store(checked, Ordering::Relaxed);
+            r.store(redo, Ordering::Relaxed);
+        }
+        Event::Progress(p) => {
+            m.fetch_max(p.downloaded, Ordering::Relaxed);
+            f.fetch_min(p.downloaded, Ordering::Relaxed);
+        }
+        _ => {}
+    });
+    let path = download(single_link(&url, &dir, &store), CancellationToken::new(), emit).await.unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), expected(0));
+    assert_eq!(redo.load(Ordering::Relaxed), 0, "intact pieces pass the check");
+    assert_eq!(checked.load(Ordering::Relaxed), 2, "one finished piece and one partial");
+    let second = s.bytes_served.load(Ordering::Relaxed) - before;
+    assert!(second.abs_diff(SIZE - on_disk) <= 4096, "fetched {second} bytes, expected the {} that were missing", SIZE - on_disk);
+    assert!(max_shown.load(Ordering::Relaxed) <= SIZE, "progress must never exceed the file size");
+    assert!(first_shown.load(Ordering::Relaxed) >= on_disk, "progress starts from what is already on disk, not from zero");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_damaged_partial_piece_is_fetched_from_its_start() {
+    let s = serve(true).await;
+    let dir = tmp("badpartial");
+    let store = Arc::new(Store::in_memory().unwrap());
+    let url = format!("http://127.0.0.1:{}/q.bin", s.port);
+    let chunk = interrupted_state(&url, &dir, &store, "q.bin.grabnr", 600_000).await;
+
+    // The saved part of piece 1 is damaged.
+    let staging = dir.join("q.bin.grabnr");
+    let mut bytes = std::fs::read(&staging).unwrap();
+    bytes[chunk as usize..chunk as usize + 4096].fill(0);
+    std::fs::write(&staging, bytes).unwrap();
+
+    let redo = Arc::new(AtomicUsize::new(0));
+    let r = redo.clone();
+    let emit: Arc<dyn Fn(Event) + Send + Sync> = Arc::new(move |e| {
+        if let Event::ResumeChecked { redo, .. } = e {
+            r.store(redo, Ordering::Relaxed);
+        }
+    });
+    let path = download(single_link(&url, &dir, &store), CancellationToken::new(), emit).await.unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), expected(0), "the damaged part must be repaired");
+    assert_eq!(redo.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_interrupted_fetch_saves_how_far_it_got() {
+    // Real interruption: cancel while a piece is part-way. Whether a piece happens to be mid-way at that instant depends
+    // on timing, so try a few times; the run must save progress inside a piece at least once.
+    for attempt in 0..8 {
+        let s = serve(true).await;
+        let dir = tmp(&format!("realpartial{attempt}"));
+        let store = Arc::new(Store::in_memory().unwrap());
+        let url = format!("http://127.0.0.1:{}/r.bin", s.port);
+        let mut o = single_link(&url, &dir, &store);
+        o.speed_limit = Some(1024 * 1024);
+        let cancel = CancellationToken::new();
+        let c = cancel.clone();
+        let emit: Arc<dyn Fn(Event) + Send + Sync> = Arc::new(move |e| {
+            if let Event::Progress(p) = e {
+                if p.downloaded >= 400_000 {
+                    c.cancel(); // first piece (1 MB) is still in flight
+                }
+            }
+        });
+        let err = download(o, cancel, emit).await.unwrap_err();
+        assert!(matches!(err, Error::Cancelled), "{err}");
+        let (_, saved) = store.load(&key(&url, &dir, "r.bin.grabnr")).unwrap().unwrap();
+        if let Some(&(idx, len, _)) = saved.partial.first() {
+            assert_eq!(idx, 0);
+            assert!(len > 0 && len < 1 << 20, "{len}");
+            let path = download(single_link(&url, &dir, &store), CancellationToken::new(), silent()).await.unwrap();
+            assert_eq!(std::fs::read(path).unwrap(), expected(0));
+            return;
+        }
+    }
+    panic!("no attempt saved progress inside a piece");
+}

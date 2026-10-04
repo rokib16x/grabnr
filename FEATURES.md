@@ -41,7 +41,7 @@ Anything marked built has not yet been proven on two real links with different g
 - [x] SHA-256 / SHA-1 / MD5 verification, typed in or from a Metalink file
 - [x] Per-piece checksums: on resume every finished piece is re-read and checked, damaged ones are downloaded again
 - [x] "Change link" for an expired or replaced link: keeps the pieces already downloaded if it is the same file
-- [ ] Resume inside a piece (progress within a 1-8 MB piece is lost on pause or crash)
+- [x] Resume inside a piece: progress within a piece is saved about every MiB and continues from there, re-checked by checksum
 - [ ] Resume for servers without range support (those restart from zero)
 - [x] Disk-space check before starting; partial-file cleanup on delete
 

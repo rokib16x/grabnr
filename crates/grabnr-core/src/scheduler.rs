@@ -52,6 +52,8 @@ struct Inner {
     pending: VecDeque<usize>,
     attempts: Vec<u32>,
     done: usize,
+    /// Bytes of each chunk already safely on disk, and the CRC-32 of them. Equals the chunk length once done.
+    have: Vec<(u64, u32)>,
 }
 
 pub struct Scheduler(Mutex<Inner>);
@@ -68,7 +70,48 @@ impl Scheduler {
         }
         let pending = (0..ranges.len()).filter(|&i| matches!(state[i], State::Pending)).collect();
         let attempts = vec![0; ranges.len()];
-        Scheduler(Mutex::new(Inner { ranges, state, pending, attempts, done }))
+        let have = ranges.iter().zip(&state).map(|(&(s, e), st)| (if matches!(st, State::Done) { e - s + 1 } else { 0 }, 0)).collect();
+        Scheduler(Mutex::new(Inner { ranges, state, pending, attempts, done, have }))
+    }
+
+    /// Start chunks that were partly downloaded in an earlier run from where they stopped: `(index, bytes, crc)`.
+    pub fn with_have(self, saved: &[(usize, u64, u32)]) -> Self {
+        {
+            let mut g = self.0.lock().unwrap();
+            for &(i, len, crc) in saved {
+                if let (Some(&(s, e)), Some(State::Pending)) = (g.ranges.get(i), g.state.get(i)) {
+                    if len > 0 && len < e - s + 1 {
+                        g.have[i] = (len, crc);
+                    }
+                }
+            }
+        }
+        self
+    }
+
+    /// Bytes safely on disk across all chunks: finished ones in full, partial ones as far as they got.
+    pub fn settled(&self) -> u64 {
+        self.0.lock().unwrap().have.iter().map(|h| h.0).sum()
+    }
+
+    /// How much of the chunk is already on disk, and the checksum of those bytes.
+    pub fn have(&self, idx: usize) -> (u64, u32) {
+        self.0.lock().unwrap().have[idx]
+    }
+
+    /// Record that the first `len` bytes of a chunk are on disk (checksum `crc`) so a later fetch can continue there.
+    /// Only accepted while a single worker is on the chunk, so racing copies cannot disagree about it.
+    /// Returns how many bytes were newly settled.
+    pub fn set_have(&self, idx: usize, len: u64, crc: u32) -> Option<u64> {
+        let mut g = self.0.lock().unwrap();
+        let (s, e) = g.ranges[idx];
+        let sole = matches!(g.state[idx], State::Active { workers: 1, .. } | State::Pending);
+        if !sole || len <= g.have[idx].0 || len > e - s {
+            return None;
+        }
+        let delta = len - g.have[idx].0;
+        g.have[idx] = (len, crc);
+        Some(delta)
     }
 
     pub fn lease(&self) -> Lease {
@@ -105,15 +148,18 @@ impl Scheduler {
         }
     }
 
-    /// Returns true if this call is the one that finished the chunk.
-    pub fn complete(&self, idx: usize) -> bool {
+    /// `Some(bytes newly settled)` if this call is the one that finished the chunk, `None` if it was already done.
+    pub fn complete(&self, idx: usize) -> Option<u64> {
         let mut g = self.0.lock().unwrap();
         if matches!(g.state[idx], State::Done) {
-            return false;
+            return None;
         }
+        let (s, e) = g.ranges[idx];
+        let delta = (e - s + 1) - g.have[idx].0;
+        g.have[idx] = (e - s + 1, 0);
         g.state[idx] = State::Done;
         g.done += 1;
-        true
+        Some(delta)
     }
 
     /// A worker gives a chunk back. Returns how many times it has failed so far.
@@ -181,7 +227,7 @@ mod tests {
         let Lease::Chunk { idx: c, .. } = s.lease() else { panic!() };
         assert_eq!((a, b, c), (0, 1, 2));
         for i in [a, b, c] {
-            assert!(s.complete(i));
+            assert!(s.complete(i).is_some());
         }
         assert_eq!(s.lease(), Lease::Finished);
     }
@@ -192,14 +238,14 @@ mod tests {
         let Lease::Chunk { idx: slow, .. } = s.lease() else { panic!() };
         std::thread::sleep(std::time::Duration::from_millis(2));
         let Lease::Chunk { idx: fast, .. } = s.lease() else { panic!() };
-        assert!(s.complete(fast));
+        assert!(s.complete(fast).is_some());
         // queue empty: the idle worker races the slow chunk
         assert_eq!(s.lease(), Lease::Chunk { idx: slow, start: 0, end: 9, raced: true });
         // already two workers on it: nothing more to race
         assert_eq!(s.lease(), Lease::Wait);
         // first finisher wins, the second is told it lost
-        assert!(s.complete(slow));
-        assert!(!s.complete(slow));
+        assert!(s.complete(slow).is_some());
+        assert!(s.complete(slow).is_none());
         assert_eq!(s.lease(), Lease::Finished);
     }
 
@@ -215,7 +261,34 @@ mod tests {
     fn resume_skips_done_chunks() {
         let s = Scheduler::new(plan(30, 10), &[0, 2]);
         assert!(matches!(s.lease(), Lease::Chunk { idx: 1, .. }));
-        assert!(s.complete(1));
+        assert!(s.complete(1).is_some());
         assert!(s.finished());
+    }
+
+    #[test]
+    fn partial_progress_is_remembered_only_for_a_sole_worker() {
+        let s = Scheduler::new(plan(10, 5), &[]); // two chunks of 5 bytes
+        assert_eq!(s.settled(), 0);
+        let Lease::Chunk { idx, .. } = s.lease() else { panic!() };
+        assert_eq!(s.set_have(idx, 3, 0xAB), Some(3));
+        assert_eq!(s.have(idx), (3, 0xAB));
+        assert_eq!(s.set_have(idx, 2, 1), None, "never goes backwards");
+        assert_eq!(s.set_have(idx, 5, 1), None, "a whole chunk is complete, not partial");
+        assert_eq!(s.settled(), 3);
+        // a second worker joins the same chunk (tail racing): no more partial updates
+        s.release(idx, false);
+        let (Lease::Chunk { idx: a, .. }, Lease::Chunk { .. }) = (s.lease(), s.lease()) else { panic!() };
+        assert_eq!(s.set_have(a, 4, 2), Some(1));
+        let Lease::Chunk { idx: raced, raced: true, .. } = s.lease() else { panic!("expected a raced lease") };
+        assert_eq!(s.set_have(raced, 5, 3), None);
+        assert_eq!(s.complete(idx), Some(1), "finishing counts only what was not yet settled");
+    }
+
+    #[test]
+    fn saved_partials_seed_the_scheduler() {
+        let s = Scheduler::new(plan(10, 5), &[0]).with_have(&[(1, 2, 77), (0, 3, 1), (9, 1, 1), (1, 99, 5)]);
+        assert_eq!(s.have(1), (2, 77), "an oversized entry is ignored");
+        assert_eq!(s.have(0), (5, 0), "a finished chunk is not touched");
+        assert_eq!(s.settled(), 7);
     }
 }
