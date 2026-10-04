@@ -11,10 +11,15 @@
 </style>
 <h1>grabnr</h1>
 <h2>Connection</h2>
-<p class="hint">Click "Allow pairing" in the grabnr app first (open for 60 seconds), then press Pair.</p>
-<button id="pair">Pair</button> <button id="test">Test connection</button>
-<p><label>Token (manual)<br><input type="password" id="token" autocomplete="off"></label></p>
+<p class="hint">Nothing to set up: grabnr recognises this extension automatically. Just keep the grabnr app running.</p>
+<button id="test">Test connection</button>
 <div id="msg"></div>
+<details>
+  <summary class="hint">Advanced: token for unofficial builds</summary>
+  <p class="hint">Only needed if you loaded a modified copy of this extension. In grabnr, press Allow pairing, then Pair here, or paste the token.</p>
+  <button id="pair">Pair</button>
+  <p><label>Token<br><input type="password" id="token" autocomplete="off"></label></p>
+</details>
 
 <h2>Capture</h2>
 <label><input type="checkbox" id="enabled"> Capture browser downloads</label>

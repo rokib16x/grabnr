@@ -12,13 +12,20 @@ not supported or tested).
 3. Enable **Developer mode**.
 4. Click **Load unpacked** and select this `extension/` folder.
 
-## Pair
+## Connecting
 
-1. In the grabnr app, click **Allow pairing** (open for 60 seconds).
-2. In the extension popup or options page, click **Pair**.
+Nothing to pair. The manifest pins a public key, so this extension always has the ID
+`nmfkcamnjeiknlpdpepoomkalaglenbb`, and grabnr trusts requests from exactly that extension
+(browsers set the `Origin` header themselves; web pages cannot forge it). The popup shows
+**Connected** when the app is running.
 
-The token is stored in `chrome.storage.local`. You can also paste a token
-manually in the options page, and use **Test connection** to verify it.
+If the ID shown on the extensions page differs, you loaded a modified copy. In that case use
+the **Advanced** section of the options page: press *Allow pairing* in grabnr, then **Pair**
+(or paste the token), and use **Test connection** to verify.
+
+**Tip:** Brave and Chrome can ask where to save every file. That dialog appears before the
+extension sees the download, so turn off "Ask where to save each file" in the browser's
+download settings for a seamless hand-off.
 
 ## How capture works
 
@@ -35,7 +42,7 @@ unreachable on the last attempt.
 
 - The browser briefly starts the download before it is cancelled; you may see a
   flash in the download bar, and a partial temp file is removed on cancel.
-- Fail open: if grabnr is not running, not paired, or errors, the browser keeps
+- Fail open: if grabnr is not running, not recognised, or errors, the browser keeps
   the download. You get at most one quiet notification per minute.
 - The app must be running for capture to work.
 - `blob:`, `data:`, `file:`, `filesystem:` and extension URLs are never captured.

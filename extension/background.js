@@ -34,7 +34,7 @@ function quietNotify(message) {
 
 function failMessage(r) {
   if (r.status === 0) return 'grabnr is not running; the browser is downloading this file.';
-  if (r.status === 401) return 'grabnr is not paired; open the extension options to pair.';
+  if (r.status === 401) return 'grabnr did not recognise this extension; see the extension options.';
   return 'grabnr could not take this download; the browser is handling it.';
 }
 

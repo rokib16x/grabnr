@@ -5,6 +5,10 @@
 //! - `POST /add`  `Authorization: Bearer <token>`, JSON `{url, filename?, referrer?, cookies?, userAgent?, headers?}`
 //!
 //! Requests that carry a web-page `Origin` are refused, so a website cannot talk to this port.
+//!
+//! The official grabnr extension has a fixed ID (its manifest pins a public key). Browsers set the
+//! `Origin` header themselves and pages cannot forge it, so requests from that exact extension are
+//! trusted without a token: no pairing step. Any other extension still needs the token.
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -47,6 +51,9 @@ fn header(req: &Request, name: &str) -> Option<String> {
     req.headers().iter().find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(name)).map(|h| h.value.as_str().to_string())
 }
 
+/// Origins of the official extension build, trusted without a token.
+const TRUSTED_ORIGINS: [&str; 1] = ["chrome-extension://nmfkcamnjeiknlpdpepoomkalaglenbb"];
+
 fn extension_origin(o: &str) -> bool {
     ["chrome-extension://", "moz-extension://", "safari-web-extension://"].iter().any(|p| o.starts_with(p))
 }
@@ -84,7 +91,8 @@ fn handle(m: &Arc<Manager>, mut req: Request) {
         },
         (Method::Post, "/add") => {
             let token = header(&req, "authorization").and_then(|a| a.strip_prefix("Bearer ").map(str::to_owned)).unwrap_or_default();
-            if !m.token_ok(&token) {
+            let trusted = origin.as_deref().is_some_and(|o| TRUSTED_ORIGINS.contains(&o));
+            if !trusted && !m.token_ok(&token) {
                 return reply(req, 401, json!({"error": "unauthorized"}), cors);
             }
             let mut body = String::new();

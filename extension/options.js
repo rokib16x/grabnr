@@ -24,11 +24,9 @@ $('pair').addEventListener('click', async () => {
 $('test').addEventListener('click', async () => {
   const p = await ping();
   if (!p.running) return say('grabnr is not running.');
-  const token = $('token').value.trim();
-  if (!token) return say(`grabnr ${p.version} is running, but no token is set.`);
-  const r = await checkToken(token);
+  const r = await checkToken($('token').value.trim());
   say(r === 'ok' ? `Connected (grabnr ${p.version}).`
-    : r === 'bad_token' ? 'Running, but the token was rejected. Pair again.'
+    : r === 'bad_token' ? 'Running, but this extension is not authorised. Use the Advanced token section.'
     : r === 'not_running' ? 'grabnr is not running.' : 'Unexpected response from grabnr.');
 });
 

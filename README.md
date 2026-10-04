@@ -44,9 +44,9 @@ node extension/test/harness.mjs
 
 ## Browser extension
 
-Load `extension/` unpacked (see `extension/README.md`), click **Allow pairing** in grabnr's Settings, then **Pair** in the extension options.
+Load `extension/` unpacked (see `extension/README.md`). No pairing: grabnr trusts the extension by its fixed ID.
 Downloads started in the browser are sent to grabnr and the browser copy is cancelled. If grabnr is not running, the browser downloads normally.
-The app listens on `127.0.0.1:17653` only, refuses requests from web pages, and requires a token for `/add`.
+The app listens on `127.0.0.1:17653` only, refuses requests from web pages, and accepts `/add` only from the official extension's ID or with a token.
 
 ```bash
 cargo run -p grabnr-cli -- links

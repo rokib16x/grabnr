@@ -3,15 +3,46 @@
   "name": "grabnr",
   "version": "0.1.0",
   "description": "Hand browser downloads to the grabnr desktop download manager.",
-  "permissions": ["downloads", "cookies", "contextMenus", "storage", "notifications"],
-  "host_permissions": ["http://127.0.0.1:17653/*", "<all_urls>"],
-  "background": { "service_worker": "background.js", "type": "module" },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA5PtXEzMlkpn/MjvBwVhkpJ7RSoR90zWxjGTnsAzAkzYC8kB/Y5rfQ2Akos5wOSUKC5VZi06iq9L0/pLelKvYkP+kfS1NRd3iGapahMjHdohW/t/7HKIiw5ThqdvZLCylmvcvS+mhEOnDUBugQ4HNUfZHbMcuNCq5uWanmD0YEzdJchN3pA8rclG/lr5pGjD4EhJxwTigQDQsEMt+yKIiVHcRDyBLI/p/Iy3Hsr2UaZf7VaF1vEycmjiYLmY+W5sJo1BzyONReVGQg9738aWI+/vJrEB+d74brekY2ZPrTETMq6AAsnex/g8/O8HbhnURtzVBnQLmSyguifq9B8dIuwIDAQAB",
+  "permissions": [
+    "downloads",
+    "cookies",
+    "contextMenus",
+    "storage",
+    "notifications"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:17653/*",
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
   "action": {
     "default_title": "grabnr",
     "default_popup": "popup.html",
-    "default_icon": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png" }
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
   },
-  "options_ui": { "page": "options.html", "open_in_tab": true },
-  "icons": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
-  "browser_specific_settings": { "gecko": { "id": "grabnr@grabnr.invalid", "strict_min_version": "121.0" } }
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "grabnr@grabnr.invalid",
+      "strict_min_version": "121.0"
+    }
+  }
 }
