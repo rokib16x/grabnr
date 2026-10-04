@@ -140,6 +140,9 @@ pub struct Settings {
     /// Mark finished files as downloaded from the internet (macOS), so Gatekeeper checks apps and installers.
     #[serde(default = "yes")]
     pub quarantine: bool,
+    /// Keep sign-in headers and proxy passwords in the macOS Keychain instead of the data files.
+    #[serde(default)]
+    pub keychain: bool,
 }
 
 /// What to do once the queue has finished. Never saved: a forgotten "sleep" must not surprise the next session.
@@ -202,6 +205,7 @@ pub struct SettingsPatch {
     pub after_command: Option<String>,
     pub webhook_url: Option<String>,
     pub quarantine: Option<bool>,
+    pub keychain: Option<bool>,
 }
 
 pub struct AddRequest {
@@ -247,6 +251,8 @@ pub struct Manager {
     history: Mutex<Vec<HistoryRec>>,
     /// One speed limit shared by every download; the schedule and settings change it while they run.
     webhook_error: Mutex<Option<String>>,
+    secrets: Arc<crate::secrets::Cached>,
+    keychain_error: Mutex<Option<String>>,
     limiter: Arc<Limiter>,
     effect: Mutex<Effect>,
     pub api_ok: Mutex<bool>,
@@ -299,9 +305,18 @@ impl Manager {
                 after_command: String::new(),
                 webhook_url: String::new(),
                 quarantine: true,
+                keychain: false,
             });
+        #[cfg(target_os = "macos")]
+        let backend: Box<dyn crate::secrets::SecretStore> = Box::new(crate::secrets::Keychain);
+        #[cfg(not(target_os = "macos"))]
+        let backend: Box<dyn crate::secrets::SecretStore> = Box::new(crate::secrets::Unavailable);
+        let secrets = Arc::new(crate::secrets::Cached::new(backend));
         let mut items: Vec<Item> =
             std::fs::read(data_dir.join("downloads.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        let mut settings = settings;
+        // Sign-in details kept in the Keychain come back here; ones that cannot be read are dropped.
+        crate::secrets::restore(&mut items, &mut settings.proxy, &*secrets);
         // Anything that was running when the app quit is resumable, not running.
         for i in &mut items {
             if matches!(i.status, Status::Downloading | Status::Queued) {
@@ -329,6 +344,8 @@ impl Manager {
             pairing_until: Mutex::new(None),
             history: Mutex::new(history),
             webhook_error: Mutex::new(None),
+            secrets,
+            keychain_error: Mutex::new(None),
             limiter: Arc::new(Limiter::new(0)),
             effect: Mutex::new(Effect::default()),
             api_ok: Mutex::new(false),
@@ -340,11 +357,42 @@ impl Manager {
 
     fn persist(&self) {
         let g = self.inner.lock().unwrap();
-        if let Ok(b) = serde_json::to_vec_pretty(&g.items) {
+        let mut settings = g.settings.clone();
+        let mut items = g.items.clone();
+        if g.settings.keychain {
+            match crate::secrets::scrub(&g.items, &g.settings.proxy, &*self.secrets) {
+                Ok((i, p)) => {
+                    items = i;
+                    settings.proxy = p;
+                    *self.keychain_error.lock().unwrap() = None;
+                }
+                // Better to keep the data than to lose it: fall back to the file and say so in the diagnostics.
+                Err(e) => *self.keychain_error.lock().unwrap() = Some(e),
+            }
+        }
+        if let Ok(b) = serde_json::to_vec_pretty(&items) {
             let _ = write_private(&self.data_dir.join("downloads.json"), &b);
         }
-        if let Ok(b) = serde_json::to_vec_pretty(&g.settings) {
+        if let Ok(b) = serde_json::to_vec_pretty(&settings) {
             let _ = write_private(&self.data_dir.join("settings.json"), &b);
+        }
+    }
+
+    pub fn keychain_available(&self) -> bool {
+        crate::secrets::SecretStore::available(&*self.secrets)
+    }
+
+    /// Check that the Keychain accepts a write and gives it back, before the option is switched on.
+    pub fn keychain_probe(&self) -> Result<(), String> {
+        use crate::secrets::SecretStore;
+        let key = "probe/grabnr";
+        self.secrets.set(key, "ok").map_err(|e| format!("The Keychain refused access: {e}"))?;
+        let back = self.secrets.get(key).map_err(|e| format!("The Keychain could not be read: {e}"))?;
+        let _ = self.secrets.delete(key);
+        if back.as_deref() == Some("ok") {
+            Ok(())
+        } else {
+            Err("The Keychain did not return what was stored.".into())
         }
     }
 
@@ -357,6 +405,7 @@ impl Manager {
     }
 
     pub fn set_settings(self: &Arc<Self>, p: SettingsPatch) {
+        let mut turned_off_keychain = false;
         {
             let mut g = self.inner.lock().unwrap();
             if let Some(v) = p.dest_dir {
@@ -407,8 +456,17 @@ impl Manager {
             if let Some(v) = p.quarantine {
                 g.settings.quarantine = v;
             }
+            if let Some(v) = p.keychain {
+                turned_off_keychain = g.settings.keychain && !v;
+                g.settings.keychain = v;
+            }
         }
         self.persist();
+        if turned_off_keychain {
+            // The files now hold the real values again; remove the copies from the Keychain.
+            let items = self.inner.lock().unwrap().items.clone();
+            crate::secrets::forget_all(&items, &*self.secrets);
+        }
         self.apply_schedule_now();
     }
 
@@ -530,6 +588,9 @@ impl Manager {
         };
         if let Some(c) = cancel {
             c.cancel();
+        }
+        if let Some(item) = &item {
+            crate::secrets::forget(item, &*self.secrets);
         }
         if let Some(item) = item {
             if delete_files {

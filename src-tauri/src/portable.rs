@@ -86,6 +86,7 @@ mod tests {
             onboarded: true,
             sound: false,
             quarantine: true,
+            keychain: false,
             schedule: vec![],
             after_command: "echo done".into(),
             webhook_url: "https://hooks.example/x".into(),

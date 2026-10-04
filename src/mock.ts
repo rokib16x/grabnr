@@ -5,7 +5,7 @@ type Handlers = { item: (i: Item) => void; removed: (id: string) => void; event:
 
 let handlers: Handlers | null = null;
 const items: Item[] = [];
-const settings: Settings = { dest_dir: "/Users/you/Downloads", enabled_links: null, conns_per_route: 8, max_active: 3, speed_limit_kbps: 0, auto_retry: 3, link_rules: {}, skip_cellular: false, proxy: "", onboarded: false, sound: true, schedule: [], after_command: "", webhook_url: "", quarantine: true, token: "d3adbeefcafe0123456789abcdef0123456789abcd" };
+const settings: Settings = { dest_dir: "/Users/you/Downloads", enabled_links: null, conns_per_route: 8, max_active: 3, speed_limit_kbps: 0, auto_retry: 3, link_rules: {}, skip_cellular: false, proxy: "", onboarded: false, sound: true, schedule: [], after_command: "", webhook_url: "", quarantine: true, keychain: false, token: "d3adbeefcafe0123456789abcdef0123456789abcd" };
 const timers = new Map<string, number>();
 let autostart = false;
 
@@ -68,7 +68,7 @@ export const mock = {
           const bad = seed("backup.zip", 400e6, "error", 0);
           bad.error = "HTTP 404 Not Found";
         }
-        return { downloads: items, settings, api_port: 17653, api_ok: true, schedule: { hold: false, limit_kbps: 0, rule: null }, after_all: "none" } satisfies AppState;
+        return { downloads: items, settings, api_port: 17653, api_ok: true, schedule: { hold: false, limit_kbps: 0, rule: null }, after_all: "none", keychain_available: true } satisfies AppState;
       }
       case "get_links":
         return {

@@ -39,7 +39,10 @@ Anything marked built has not yet been proven on two real links with different g
 - [x] Pause/resume across quit and crash, state in SQLite
 - [x] ETag/Last-Modified check; a changed file discards the partial download
 - [x] SHA-256 / SHA-1 / MD5 verification, typed in or from a Metalink file
-- [ ] Per-chunk verification and repair/re-verify
+- [x] Per-piece checksums: on resume every finished piece is re-read and checked, damaged ones are downloaded again
+- [x] "Change link" for an expired or replaced link: keeps the pieces already downloaded if it is the same file
+- [ ] Resume inside a piece (progress within a 1-8 MB piece is lost on pause or crash)
+- [ ] Resume for servers without range support (those restart from zero)
 - [x] Disk-space check before starting; partial-file cleanup on delete
 
 ## 4. Queue and scheduling
@@ -85,7 +88,7 @@ Anything marked built has not yet been proven on two real links with different g
 - [x] No telemetry
 - [x] TLS validation through rustls
 - [x] Credentials kept in a 0600 file, never sent to the UI
-- [ ] Credentials in the macOS Keychain
+- [~] Optional Keychain storage for sign-in headers and proxy passwords (the extension token stays in a 0600 file)
 
 ## 9. Quality
 - [x] Unit tests, local range-server integration tests (mirrors, auth, proxy, hot-plug, stalls)

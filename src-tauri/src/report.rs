@@ -51,7 +51,7 @@ pub fn build(i: &Input) -> String {
         i.counts.downloading, i.counts.queued, i.counts.paused, i.counts.done, i.counts.error
     ));
     out.push_str(&format!(
-        "\nSettings\n  max connections per link: {}\n  simultaneous downloads: {}\n  speed limit: {}\n  automatic retries: {}\n  schedule rules: {}\n  link rules: {}\n  skip cellular: {}\n  proxy: {}\n  webhook: {}\n  quarantine flag: {}\n  run command when finished: {}\n",
+        "\nSettings\n  max connections per link: {}\n  simultaneous downloads: {}\n  speed limit: {}\n  automatic retries: {}\n  schedule rules: {}\n  link rules: {}\n  skip cellular: {}\n  proxy: {}\n  webhook: {}\n  quarantine flag: {}\n  run command when finished: {}\n  keychain: {}\n",
         s.conns_per_route,
         s.max_active,
         if s.speed_limit_kbps == 0 { "none".to_string() } else { format!("{} KB/s", s.speed_limit_kbps) },
@@ -63,6 +63,7 @@ pub fn build(i: &Input) -> String {
         if s.webhook_url.is_empty() { "none" } else { "set" },
         yes(s.quarantine),
         if s.after_command.is_empty() { "none" } else { "set" },
+        yes(s.keychain),
     ));
     if !i.errors.is_empty() {
         out.push_str("\nRecent failures (host only)\n");

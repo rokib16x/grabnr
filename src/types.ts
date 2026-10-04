@@ -54,6 +54,7 @@ export type Settings = {
   after_command: string;
   webhook_url: string;
   quarantine: boolean;
+  keychain: boolean;
 };
 
 export type ScheduleMode = { kind: "pause" } | { kind: "limit"; kbps: number } | { kind: "full" };
@@ -61,7 +62,7 @@ export type ScheduleRule = { id: string; name: string; enabled: boolean; days: b
 export type ScheduleEffect = { hold: boolean; limit_kbps: number; rule: string | null };
 export type AfterAll = "none" | "sleep" | "quit" | "command";
 
-export type AppState = { downloads: Item[]; settings: Settings; api_port: number; api_ok: boolean; schedule: ScheduleEffect; after_all: AfterAll };
+export type AppState = { downloads: Item[]; settings: Settings; api_port: number; api_ok: boolean; schedule: ScheduleEffect; after_all: AfterAll; keychain_available: boolean };
 
 export type Link = {
   name: string;

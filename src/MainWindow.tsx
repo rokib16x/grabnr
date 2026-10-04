@@ -262,7 +262,7 @@ export function MainWindow() {
       {relink && <LinkDialog item={relink} onClose={() => setRelink(null)} />}
       {palette && <CommandPalette commands={commands} onClose={() => setPalette(false)} />}
       {settingsOpen && d.app && (
-        <SettingsPanel settings={d.app.settings} apiPort={d.app.api_port} apiOk={d.app.api_ok} onChange={(settings: Settings) => d.setApp({ ...d.app!, settings })} onClose={() => setSettingsOpen(false)} />
+        <SettingsPanel settings={d.app.settings} apiPort={d.app.api_port} apiOk={d.app.api_ok} keychainAvailable={d.app.keychain_available} onChange={(settings: Settings) => d.setApp({ ...d.app!, settings })} onClose={() => setSettingsOpen(false)} />
       )}
       {d.app && !d.app.settings.onboarded && !skipOnboarding && <Onboarding app={d.app} onDone={() => { setSkipOnboarding(true); d.setApp({ ...d.app!, settings: { ...d.app!.settings, onboarded: true } }); }} />}
     </div>

@@ -4,7 +4,7 @@ import { linkColor } from "./format";
 import { ScheduleEditor } from "./ScheduleEditor";
 import type { LinkRule, LinksResponse, Settings as S, SpikeReport } from "./types";
 
-export function SettingsPanel({ settings, apiPort, apiOk, onChange, onClose }: { settings: S; apiPort: number; apiOk: boolean; onChange: (s: S) => void; onClose: () => void }) {
+export function SettingsPanel({ settings, apiPort, apiOk, keychainAvailable, onChange, onClose }: { settings: S; apiPort: number; apiOk: boolean; keychainAvailable: boolean; onChange: (s: S) => void; onClose: () => void }) {
   const [links, setLinks] = useState<LinksResponse | null>(null);
   const [pairLeft, setPairLeft] = useState(0);
   const [showToken, setShowToken] = useState(false);
@@ -33,7 +33,13 @@ export function SettingsPanel({ settings, apiPort, apiOk, onChange, onClose }: {
     return () => clearTimeout(t);
   }, [pairLeft]);
 
-  const patch = async (p: Partial<S>) => onChange(await api.setSettings(p));
+  const patch = async (p: Partial<S>) => {
+    try {
+      onChange(await api.setSettings(p));
+    } catch (e) {
+      setNote(String(e)); // for example the Keychain refusing access
+    }
+  };
   const enabled = (name: string) => settings.enabled_links === null || settings.enabled_links.includes(name);
   const toggle = (name: string) => {
     const all = links?.links.map((l) => l.name) ?? [];
@@ -109,6 +115,12 @@ export function SettingsPanel({ settings, apiPort, apiOk, onChange, onClose }: {
 
         <section>
           <h3>Files and integrations</h3>
+          {keychainAvailable && (
+            <label className="link">
+              <input type="checkbox" checked={settings.keychain} onChange={(e) => patch({ keychain: e.target.checked })} />
+              Keep sign-in details and proxy passwords in the macOS Keychain instead of a file
+            </label>
+          )}
           <label className="link">
             <input type="checkbox" checked={settings.quarantine} onChange={(e) => patch({ quarantine: e.target.checked })} />
             Mark finished files as downloaded from the internet (macOS checks apps before they first open)

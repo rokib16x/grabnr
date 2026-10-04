@@ -7,6 +7,7 @@ mod quarantine;
 mod queue;
 mod report;
 mod schedule;
+mod secrets;
 mod thumbs;
 
 use std::sync::Arc;
@@ -57,6 +58,7 @@ struct AppState {
     api_ok: bool,
     schedule: schedule::Effect,
     after_all: manager::AfterAll,
+    keychain_available: bool,
 }
 
 #[tauri::command]
@@ -75,6 +77,7 @@ fn get_state(m: Mgr) -> AppState {
         api_ok: *m.api_ok.lock().unwrap(),
         schedule: m.schedule_effect(),
         after_all: m.after_all(),
+        keychain_available: m.keychain_available(),
     }
 }
 
@@ -279,9 +282,12 @@ fn open_download(app: tauri::AppHandle, m: Mgr, id: String) -> Result<(), String
 }
 
 #[tauri::command]
-fn set_settings(m: Mgr, patch: SettingsPatch) -> Settings {
+fn set_settings(m: Mgr, patch: SettingsPatch) -> Result<Settings, String> {
+    if patch.keychain == Some(true) {
+        m.keychain_probe()?;
+    }
     m.set_settings(patch);
-    m.settings()
+    Ok(m.settings())
 }
 
 #[tauri::command]
