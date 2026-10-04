@@ -7,6 +7,7 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 ### Added
 - **Engine:** speed limits (overall and per link), checksum verification (SHA-256, SHA-1, MD5), disk-space check, adaptive connections per link, slow-link protection at the end of a download.
 - **Reliability:** links that join or leave a running download, restart on a changed IP, stalled-connection recovery, revival of failed links, automatic retries with growing delays.
+- **Streams:** HLS (`.m3u8`) downloads, with a quality picker, AES-128 decryption, resume, and conversion to MP4 when ffmpeg is installed.
 - **Sources:** mirrors, Metalink (`.meta4`, `.metalink`), batch link lists, a page link picker, per-download sign-in (Basic, Bearer) and proxies (HTTP, HTTPS, SOCKS5).
 - **Queue:** "Download next / last" priority, drag-to-reorder, duplicate detection.
 - **Integrations:** a webhook for finished and failed downloads, `grabnr://add?url=` links, a macOS quarantine flag on finished files, thumbnails in the inspector, settings and link-list export/import, a copyable diagnostics report.

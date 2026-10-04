@@ -139,3 +139,15 @@ test("the menu bar popover shows active downloads and actions", async ({ page })
   await expect(page.getByRole("button", { name: /Preferences/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /Quit grabnr/ })).toBeVisible();
 });
+
+test("a streaming link offers a choice of quality", async ({ page }) => {
+  await open(page);
+  await page.getByRole("button", { name: "Add download" }).click();
+  await page.getByLabel("Links").fill("https://v.example/master.m3u8");
+  await page.getByRole("button", { name: /Choose quality/ }).click();
+  const q = page.getByLabel("Quality");
+  await expect(q).toBeVisible();
+  await q.selectOption({ label: "720p · 2.8 Mbps" });
+  await page.getByRole("button", { name: "Add Download", exact: true }).last().click();
+  await expect(row(page, "master.m3u8")).toBeVisible();
+});

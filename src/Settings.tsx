@@ -122,6 +122,10 @@ export function SettingsPanel({ settings, apiPort, apiOk, keychainAvailable, onC
             </label>
           )}
           <label className="link">
+            <input type="checkbox" checked={settings.hls_to_mp4} onChange={(e) => patch({ hls_to_mp4: e.target.checked })} />
+            Turn streaming videos (.m3u8) into MP4 files when ffmpeg is installed
+          </label>
+          <label className="link">
             <input type="checkbox" checked={settings.quarantine} onChange={(e) => patch({ quarantine: e.target.checked })} />
             Mark finished files as downloaded from the internet (macOS checks apps before they first open)
           </label>

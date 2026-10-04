@@ -57,6 +57,9 @@ pub struct Item {
     /// Other URLs serving the same file (from the add dialog or a Metalink file).
     #[serde(default)]
     pub mirrors: Vec<String>,
+    /// For HLS playlists: `best`, `worst` or a height such as `720`.
+    #[serde(default)]
+    pub quality: Option<String>,
     /// Bytes per link, running time and peak speed, for the history and statistics.
     #[serde(default)]
     pub stats: Stats,
@@ -143,6 +146,9 @@ pub struct Settings {
     /// Keep sign-in headers and proxy passwords in the macOS Keychain instead of the data files.
     #[serde(default)]
     pub keychain: bool,
+    /// Turn downloaded HLS videos into MP4 files when ffmpeg is installed.
+    #[serde(default = "yes")]
+    pub hls_to_mp4: bool,
 }
 
 /// What to do once the queue has finished. Never saved: a forgotten "sleep" must not surprise the next session.
@@ -206,6 +212,7 @@ pub struct SettingsPatch {
     pub webhook_url: Option<String>,
     pub quarantine: Option<bool>,
     pub keychain: Option<bool>,
+    pub hls_to_mp4: Option<bool>,
 }
 
 pub struct AddRequest {
@@ -217,6 +224,7 @@ pub struct AddRequest {
     pub checksum: Option<String>,
     pub proxy: Option<String>,
     pub mirrors: Vec<String>,
+    pub quality: Option<String>,
 }
 
 struct Inner {
@@ -306,6 +314,7 @@ impl Manager {
                 webhook_url: String::new(),
                 quarantine: true,
                 keychain: false,
+                hls_to_mp4: true,
             });
         #[cfg(target_os = "macos")]
         let backend: Box<dyn crate::secrets::SecretStore> = Box::new(crate::secrets::Keychain);
@@ -456,6 +465,9 @@ impl Manager {
             if let Some(v) = p.quarantine {
                 g.settings.quarantine = v;
             }
+            if let Some(v) = p.hls_to_mp4 {
+                g.settings.hls_to_mp4 = v;
+            }
             if let Some(v) = p.keychain {
                 turned_off_keychain = g.settings.keychain && !v;
                 g.settings.keychain = v;
@@ -527,6 +539,7 @@ impl Manager {
                     retries: 0,
                     proxy: req.proxy.filter(|p| !p.trim().is_empty()),
                     mirrors: req.mirrors,
+                    quality: req.quality.filter(|q| !q.trim().is_empty()),
                     stats: Stats::default(),
                 },
             );
@@ -748,6 +761,10 @@ impl Manager {
         opts.link_watch = Some(Arc::new(move || watcher.link_routes()));
         opts.shared_limit = Some(self.limiter.clone());
         opts.mirrors = item.mirrors.clone();
+        opts.hls_quality = item.quality.as_deref().map(grabnr_core::Quality::parse).unwrap_or_default();
+        if self.inner.lock().unwrap().settings.hls_to_mp4 {
+            opts.ffmpeg = find_ffmpeg();
+        }
         opts.proxy = item.proxy.clone().or_else(|| Some(global_proxy).filter(|p| !p.is_empty()));
         if let Some(c) = &item.checksum {
             match grabnr_core::Checksum::parse(c) {
@@ -784,6 +801,11 @@ impl Manager {
                     }
                     Event::Progress(s) => {
                         i.downloaded = s.downloaded;
+                        // Streams (HLS) only know their size by estimate, which improves as segments arrive.
+                        if s.total.is_some() && s.total != i.total {
+                            i.total = s.total;
+                            changed = true;
+                        }
                         speed = Some(s.bytes_per_sec);
                         if let Some(run) = runs.get_mut(id) {
                             i.stats.add_progress(&mut run.seen, &s.routes);
@@ -1159,6 +1181,13 @@ fn pick_next(
         .map(|(_, i)| i.clone())
 }
 
+/// ffmpeg, if installed: on the PATH or in the usual Homebrew locations (an app started from the Dock has a short PATH).
+pub fn find_ffmpeg() -> Option<PathBuf> {
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    dirs.extend(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].map(PathBuf::from));
+    dirs.into_iter().map(|d| d.join("ffmpeg")).find(|p| p.is_file())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1181,6 +1210,7 @@ mod tests {
             retries: 0,
             proxy: None,
             mirrors: vec![],
+            quality: None,
             stats: Stats::default(),
         }
     }

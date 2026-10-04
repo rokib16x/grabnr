@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { Icon } from "./icons";
-import type { AddOptions, PageLink } from "./types";
+import type { AddOptions, HlsVariant, PageLink } from "./types";
 
 const folderName = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
 const isUrl = (s: string) => /^https?:\/\/\S+$/i.test(s);
@@ -17,6 +17,8 @@ export function AddDialog({ defaultDir, onClose }: { defaultDir?: string; onClos
   const [token, setToken] = useState("");
   const [proxy, setProxy] = useState("");
   const [mirrors, setMirrors] = useState("");
+  const [variants, setVariants] = useState<HlsVariant[] | null>(null);
+  const [quality, setQuality] = useState("best");
   const [dir, setDir] = useState(defaultDir ?? "");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -45,6 +47,7 @@ export function AddDialog({ defaultDir, onClose }: { defaultDir?: string; onClos
     token: auth === "token" ? token : undefined,
     proxy: proxy || undefined,
     mirrors: !many && mirrors.trim() ? mirrors.split(/\s+/).filter(Boolean) : undefined,
+    quality: quality !== "best" ? quality : undefined,
   });
 
   async function report(r: { added: number; duplicates: number; skipped: number }) {
@@ -66,6 +69,24 @@ export function AddDialog({ defaultDir, onClose }: { defaultDir?: string; onClos
         const r = await api.add(urls[0] ?? text, options());
         await report({ added: r.duplicate ? 0 : 1, duplicates: r.duplicate ? 1 : 0, skipped: 0 });
       }
+    } catch (x) {
+      setErr(String(x));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const isStream = urls.length === 1 && /\.m3u8($|[?#])/i.test(urls[0]);
+  // A different link means a different list of qualities.
+  useEffect(() => { setVariants(null); setQuality("best"); }, [urls[0]]);
+
+  async function findQualities() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const v = await api.hlsVariants(urls[0]);
+      setVariants(v);
+      if (v.length === 0) setErr("This stream has only one quality.");
     } catch (x) {
       setErr(String(x));
     } finally {
@@ -157,7 +178,21 @@ export function AddDialog({ defaultDir, onClose }: { defaultDir?: string; onClos
             aria-label="Links"
           />
         </label>
-        {urls.length === 1 && (
+        {isStream && (
+          <div className="form-row">
+            <span>Quality</span>
+            {variants && variants.length > 0 ? (
+              <select value={quality} onChange={(e) => setQuality(e.target.value)} aria-label="Quality">
+                <option value="best">Best available</option>
+                {variants.map((v) => <option key={v.url} value={String(v.height ?? "best")}>{v.label}</option>)}
+                <option value="worst">Smallest</option>
+              </select>
+            ) : (
+              <button type="button" className="select" onClick={findQualities} disabled={busy}><span>Best available. Choose quality…</span></button>
+            )}
+          </div>
+        )}
+        {urls.length === 1 && !isStream && (
           <button type="button" className="ghost disclose" onClick={findLinks} disabled={busy}>
             <Icon name="search" size={13} />List the links on this page…
           </button>

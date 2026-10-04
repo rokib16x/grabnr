@@ -7,7 +7,7 @@ license = "MIT"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "io-util", "process"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "socks"] }
 futures-util = "0.3"
 netdev = "0.46"
@@ -18,6 +18,8 @@ base64 = "0.22"
 quick-xml = "0.37"
 url = "2"
 crc32fast = "1"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
 sha2 = "0.10"
 sha1 = "0.10"
 md-5 = "0.10"

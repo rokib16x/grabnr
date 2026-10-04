@@ -41,6 +41,7 @@ struct AddOptions {
     token: Option<String>,
     proxy: Option<String>,
     mirrors: Option<Vec<String>>,
+    quality: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -106,7 +107,16 @@ fn build_request(url: String, o: &AddOptions) -> Result<AddRequest, String> {
         ));
     }
     let mirrors = o.mirrors.as_deref().map(grabnr_core::links::parse_url_list_from_vec).unwrap_or_default();
-    Ok(AddRequest { url, filename: o.filename.clone(), headers, dir: o.dir.clone(), checksum: o.checksum.clone(), proxy, mirrors })
+    Ok(AddRequest {
+        url,
+        filename: o.filename.clone(),
+        headers,
+        dir: o.dir.clone(),
+        checksum: o.checksum.clone(),
+        proxy,
+        mirrors,
+        quality: o.quality.clone(),
+    })
 }
 
 /// A Metalink file stands for one download with several mirrors, a size and a hash.
@@ -166,6 +176,20 @@ async fn add_batch(m: Mgr<'_>, text: String, options: Option<AddOptions>) -> Res
         }
     }
     Ok(BatchResult { added, duplicates, skipped })
+}
+
+/// The qualities a streaming (HLS) link offers, best first. Empty when it has only one.
+#[tauri::command]
+async fn list_hls_variants(m: Mgr<'_>, url: String) -> Result<Vec<grabnr_core::hls::Variant>, String> {
+    let proxy = Some(m.settings().proxy).filter(|p| !p.is_empty());
+    let (text, _) = grabnr_core::fetch::fetch_text(url.trim(), &[], proxy.as_deref(), 2 << 20).await.map_err(|e| e.to_string())?;
+    match grabnr_core::hls::parse(&text, url.trim()).map_err(|e| e.to_string())? {
+        grabnr_core::hls::Playlist::Master(mut v) => {
+            v.sort_by_key(|x| std::cmp::Reverse((x.height.unwrap_or(0), x.bandwidth)));
+            Ok(v)
+        }
+        grabnr_core::hls::Playlist::Media(_) => Ok(Vec::new()),
+    }
 }
 
 /// Links found on a web page, for picking which files to download.
@@ -548,6 +572,7 @@ pub fn run() {
             add_download,
             add_batch,
             grab_links,
+            list_hls_variants,
             get_history,
             clear_history,
             export_history,

@@ -47,6 +47,7 @@ cargo run -p grabnr-cli -- get https://proof.ovh.net/files/100Mb.dat -o ~/Downlo
 cargo run -p grabnr-cli -- get URL --only en0,en5 --limit 20 --checksum sha256:<hex>
 cargo run -p grabnr-cli -- get URL --mirror https://mirror.example/file --proxy socks5://127.0.0.1:1080
 cargo run -p grabnr-cli -- get https://example.org/file.meta4   # a Metalink file adds its mirrors and hash
+cargo run -p grabnr-cli -- get https://example.org/video.m3u8 --quality 720   # a streaming video, split over every link
 cargo run -p grabnr-cli -- spike --secs 8
 ```
 

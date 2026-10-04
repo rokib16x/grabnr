@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { mock } from "./mock";
-import type { AddOptions, AddResult, AfterAll, ScheduleEffect, BatchResult, HistoryRec, PageLink, AppState, EngineEvent, Item, LinksResponse, Settings, SpikeReport } from "./types";
+import type { AddOptions, AddResult, AfterAll, HlsVariant, ScheduleEffect, BatchResult, HistoryRec, PageLink, AppState, EngineEvent, Item, LinksResponse, Settings, SpikeReport } from "./types";
 
 const native = "__TAURI_INTERNALS__" in window;
 const call = <T,>(cmd: string, args?: Record<string, unknown>) => (native ? invoke<T>(cmd, args) : (mock.call(cmd, args) as Promise<T>));
@@ -16,6 +16,7 @@ export const api = {
   quit: () => call<void>("quit_app"),
   showMain: (settings = false) => call<void>("show_main_window", { settings }),
   addBatch: (text: string, options?: AddOptions) => call<BatchResult>("add_batch", { text, options: options ?? null }),
+  hlsVariants: (url: string) => call<HlsVariant[]>("list_hls_variants", { url }),
   grabLinks: (url: string) => call<PageLink[]>("grab_links", { url }),
   history: () => call<HistoryRec[]>("get_history"),
   clearHistory: () => call<void>("clear_history"),

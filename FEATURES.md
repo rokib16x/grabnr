@@ -31,7 +31,7 @@ Anything marked built has not yet been proven on two real links with different g
 - [x] HTTP, HTTPS and SOCKS5 proxies, per download and as a default
 - [x] Mirrors and Metalink (`.meta4`, `.metalink`)
 - [x] Batch URL lists and a page link grabber
-- [ ] HLS/DASH streams
+- [~] HLS (`.m3u8`) video-on-demand: master playlists with a quality choice, AES-128, byte ranges, fMP4, resume per segment, optional MP4 via ffmpeg. No live streams, SAMPLE-AES or DASH; links cannot join mid-download yet
 - [ ] BitTorrent and magnet links
 - [ ] Folder/archive downloads with auto-extract
 

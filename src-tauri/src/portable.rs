@@ -87,6 +87,7 @@ mod tests {
             sound: false,
             quarantine: true,
             keychain: false,
+            hls_to_mp4: true,
             schedule: vec![],
             after_command: "echo done".into(),
             webhook_url: "https://hooks.example/x".into(),
@@ -147,6 +148,7 @@ mod tests {
             retries: 0,
             proxy: None,
             mirrors: vec![],
+            quality: None,
             stats: Stats::default(),
         };
         let items = vec![mk("new", Status::Queued), mk("done", Status::Done), mk("old", Status::Paused)];

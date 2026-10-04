@@ -128,6 +128,7 @@ fn handle(m: &Arc<Manager>, mut req: Request) {
                 checksum: None,
                 proxy: None,
                 mirrors: Vec::new(),
+                quality: None,
             });
             reply(req, 200, json!({"id": id, "duplicate": duplicate}), cors)
         }

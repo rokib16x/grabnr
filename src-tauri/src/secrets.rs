@@ -242,6 +242,7 @@ pub mod tests {
             retries: 0,
             proxy: Some("socks5://u:p@h:1080".into()),
             mirrors: vec![],
+            quality: None,
             stats: Stats::default(),
         }
     }

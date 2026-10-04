@@ -96,6 +96,10 @@ pub struct Options {
     /// Stable name for the resume state. Without it the link and file name are used, so changing the link starts over;
     /// with it a replaced link (for example a new signed URL) can carry on with the same partial file.
     pub resume_key: Option<String>,
+    /// Which stream of an HLS master playlist to download.
+    pub hls_quality: crate::hls::Quality,
+    /// ffmpeg to turn a downloaded HLS transport stream into an MP4 without re-encoding; none leaves a `.ts`.
+    pub ffmpeg: Option<PathBuf>,
     /// Other URLs for the same file. Mirrors that do not report the same size (or lack range support) are ignored.
     pub mirrors: Vec<String>,
 }
@@ -125,6 +129,8 @@ impl Options {
             no_link_grace: Duration::from_secs(30),
             mirrors: Vec::new(),
             resume_key: None,
+            hls_quality: crate::hls::Quality::Best,
+            ffmpeg: None,
         }
     }
 }
@@ -192,24 +198,24 @@ const LINK_FAIL_LIMIT: u32 = 5;
 /// How much a fetch writes before it saves its progress inside the chunk.
 const CHECKPOINT: u64 = 1 << 20;
 
-struct RouteState {
+pub(crate) struct RouteState {
     name: String,
     /// Most connections this link may open.
     max: usize,
-    bytes: AtomicU64,
+    pub(crate) bytes: AtomicU64,
     allowed: AtomicUsize,
     /// Most connections this link may use; lowered when the server throttles.
     ceiling: AtomicUsize,
     /// Smoothed bytes/s, written by the progress ticker.
     speed: AtomicU64,
-    active: AtomicUsize,
+    pub(crate) active: AtomicUsize,
     last_throttle: Mutex<Instant>,
-    limit: Option<Limiter>,
+    pub(crate) limit: Option<Limiter>,
     /// Running worker tasks for this link.
     workers: AtomicUsize,
     last_exit: Mutex<Instant>,
     /// Cancelled to make this link's workers drain; replaced when the link is restarted.
-    stop: CancellationToken,
+    pub(crate) stop: CancellationToken,
     down: std::sync::atomic::AtomicBool,
 }
 
@@ -247,23 +253,34 @@ impl Drop for WorkerGuard {
     }
 }
 
-struct Shared {
-    total: Option<u64>,
+pub(crate) struct Shared {
+    /// Size of the whole download in bytes; 0 while unknown (HLS refines an estimate as segments arrive).
+    pub(crate) total: AtomicU64,
     /// Bytes safely on disk: finished chunks plus the saved part of unfinished ones.
-    settled: AtomicU64,
+    pub(crate) settled: AtomicU64,
     /// Bytes written by fetches still in progress, not yet settled.
-    inflight: AtomicU64,
+    pub(crate) inflight: AtomicU64,
     /// Append-only: a link keeps its index for the whole download, so chunk and stat indices stay valid.
     routes: RwLock<Vec<Arc<RouteState>>>,
-    limit: Option<Arc<Limiter>>,
+    pub(crate) limit: Option<Arc<Limiter>>,
 }
 
 impl Shared {
-    fn route(&self, i: usize) -> Arc<RouteState> {
+    pub(crate) fn new(total: Option<u64>, opts: &Options, stop: &CancellationToken) -> Self {
+        Shared {
+            total: AtomicU64::new(total.unwrap_or(0)),
+            settled: AtomicU64::new(0),
+            inflight: AtomicU64::new(0),
+            routes: RwLock::new(opts.routes.iter().map(|r| Arc::new(RouteState::new(r, opts, 0, stop.child_token()))).collect()),
+            limit: opts.shared_limit.clone().or_else(|| opts.speed_limit.map(|r| Arc::new(Limiter::new(r)))),
+        }
+    }
+
+    pub(crate) fn route(&self, i: usize) -> Arc<RouteState> {
         self.routes.read().unwrap()[i].clone()
     }
 
-    fn all(&self) -> Vec<Arc<RouteState>> {
+    pub(crate) fn all(&self) -> Vec<Arc<RouteState>> {
         self.routes.read().unwrap().clone()
     }
 }
@@ -317,6 +334,12 @@ pub async fn download(mut opts: Options, cancel: CancellationToken, emit: Emit) 
         opts.headers.retain(|(k, _)| !k.eq_ignore_ascii_case("authorization"));
         opts.headers.push(("Authorization".into(), a.header_value()));
     }
+    // A playlist is not one file but many small ones: it has its own path through the engine.
+    if crate::hls::looks_like(&opts.url) {
+        let path = crate::hls::download(&opts, cancel, emit.clone()).await?;
+        emit(Event::Finished { path: path.display().to_string() });
+        return Ok(path);
+    }
     let mut headers = HeaderMap::new();
     for (k, v) in &opts.headers {
         let name = HeaderName::from_bytes(k.as_bytes()).map_err(|e| Error::Other(format!("bad header {k}: {e}")))?;
@@ -349,13 +372,7 @@ pub async fn download(mut opts: Options, cancel: CancellationToken, emit: Emit) 
     let filename = sanitize(opts.filename.as_deref().unwrap_or(&probe.filename));
     let staging = opts.dest_dir.join(format!("{filename}.grabnr"));
 
-    let shared = Arc::new(Shared {
-        total: probe.total,
-        settled: AtomicU64::new(0),
-        inflight: AtomicU64::new(0),
-        routes: RwLock::new(opts.routes.iter().map(|r| Arc::new(RouteState::new(r, &opts, 0, cancel.child_token()))).collect()),
-        limit: opts.shared_limit.clone().or_else(|| opts.speed_limit.map(|r| Arc::new(Limiter::new(r)))),
-    });
+    let shared = Arc::new(Shared::new(probe.total, &opts, &cancel));
 
     let final_path = match (probe.ranges, probe.total) {
         (true, Some(total)) => ranged(&opts, &probe, clients, &filename, &staging, total, shared, cancel, emit.clone()).await?,
@@ -889,7 +906,7 @@ async fn fetch_chunk(
     }
 }
 
-fn spawn_ticker(shared: Arc<Shared>, emit: Emit) -> tokio::task::JoinHandle<()> {
+pub(crate) fn spawn_ticker(shared: Arc<Shared>, emit: Emit) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let tick = Duration::from_millis(250);
         let (mut last_routes, mut route_ema): (Vec<u64>, Vec<f64>) = (Vec::new(), Vec::new());
@@ -921,13 +938,14 @@ fn spawn_ticker(shared: Arc<Shared>, emit: Emit) -> tokio::task::JoinHandle<()> 
                 .collect();
             let ema: f64 = route_ema.iter().sum();
             // Raced duplicates count while in flight; never report more than the file size.
-            let shown = shared.total.map_or(g, |t| g.min(t));
-            emit(Event::Progress(Snapshot { downloaded: shown, total: shared.total, bytes_per_sec: ema, routes }));
+            let total = Some(shared.total.load(Ordering::Relaxed)).filter(|t| *t > 0);
+            let shown = total.map_or(g, |t| g.min(t));
+            emit(Event::Progress(Snapshot { downloaded: shown, total, bytes_per_sec: ema, routes }));
         }
     })
 }
 
-fn unique_path(dir: &Path, name: &str) -> PathBuf {
+pub(crate) fn unique_path(dir: &Path, name: &str) -> PathBuf {
     let first = dir.join(name);
     if !first.exists() {
         return first;
@@ -936,6 +954,11 @@ fn unique_path(dir: &Path, name: &str) -> PathBuf {
     let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| name.into());
     let ext = p.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
     (1..).map(|n| dir.join(format!("{stem} ({n}){ext}"))).find(|c| !c.exists()).expect("unbounded range")
+}
+
+/// Verify a finished file against the checksum in the options, if any.
+pub(crate) fn verify_checksum_path(opts: &Options, path: &Path) -> Result<()> {
+    verify_checksum(opts, path, None)
 }
 
 /// Check the finished staging file; on a mismatch drop it (and its resume record) so a retry starts clean.
@@ -990,7 +1013,7 @@ fn spawn_ramp(shared: Arc<Shared>, interval: Duration) -> tokio::task::JoinHandl
     })
 }
 
-fn max_conns(opts: &Options, r: &Route) -> usize {
+pub(crate) fn max_conns(opts: &Options, r: &Route) -> usize {
     r.max_conns.unwrap_or(opts.conns_per_route).max(1)
 }
 
@@ -1021,7 +1044,7 @@ fn origin_of(url: &str) -> Option<(String, String, u16)> {
 
 /// The request headers to send to `target`. Credentials (`Authorization`, `Cookie`, ...) are dropped when the target
 /// is not the same scheme, host and port as the URL the user gave, which happens after a redirect to a CDN and for mirrors.
-fn headers_for(headers: &[(String, String)], origin: &str, target: &str) -> HeaderMap {
+pub(crate) fn headers_for(headers: &[(String, String)], origin: &str, target: &str) -> HeaderMap {
     let same = origin == target || (origin_of(origin).is_some() && origin_of(origin) == origin_of(target));
     let mut m = HeaderMap::new();
     for (k, v) in headers {

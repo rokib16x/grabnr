@@ -13,6 +13,8 @@ struct Cli {
     cmd: Cmd,
 }
 
+// The command line is parsed once at startup, so the size of the variants does not matter.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Cmd {
     /// List usable network links
@@ -50,6 +52,12 @@ enum Cmd {
         /// Another URL for the same file (repeatable). A .meta4/.metalink URL adds its mirrors and hash by itself.
         #[arg(long = "mirror")]
         mirrors: Vec<String>,
+        /// For .m3u8 streams: best, worst, or a height such as 720
+        #[arg(long, default_value = "best")]
+        quality: String,
+        /// Do not convert a downloaded .m3u8 stream to MP4 with ffmpeg
+        #[arg(long)]
+        no_mp4: bool,
     },
     /// Check that interface binding works and that links add up
     Spike {
@@ -87,7 +95,7 @@ async fn main() {
                 println!("warning: {a} and {b} share a gateway and will not add bandwidth");
             }
         }
-        Cmd::Get { url, out, only, conns, headers, limit, checksum, proxy, user, bearer, mirrors } => {
+        Cmd::Get { url, out, only, conns, headers, limit, checksum, proxy, user, bearer, mirrors, quality, no_mp4 } => {
             let mut links = list_links();
             if !only.is_empty() {
                 links.retain(|l| only.contains(&l.name));
@@ -118,6 +126,10 @@ async fn main() {
             }
             let mut opts = Options::new(url, out, routes);
             opts.mirrors = mirrors;
+            opts.hls_quality = grabnr_core::Quality::parse(&quality);
+            if !no_mp4 {
+                opts.ffmpeg = which_ffmpeg();
+            }
             opts.checksum = meta_sum;
             opts.conns_per_route = conns;
             // Cables and Wi-Fi can come and go mid-download; follow them (still limited to --only).
@@ -234,4 +246,9 @@ fn human(b: u64) -> String {
         i += 1;
     }
     format!("{v:.1} {}", U[i])
+}
+
+/// ffmpeg on the PATH, if there is one.
+fn which_ffmpeg() -> Option<PathBuf> {
+    std::env::var_os("PATH").and_then(|p| std::env::split_paths(&p).map(|d| d.join("ffmpeg")).find(|f| f.is_file()))
 }

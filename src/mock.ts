@@ -5,7 +5,7 @@ type Handlers = { item: (i: Item) => void; removed: (id: string) => void; event:
 
 let handlers: Handlers | null = null;
 const items: Item[] = [];
-const settings: Settings = { dest_dir: "/Users/you/Downloads", enabled_links: null, conns_per_route: 8, max_active: 3, speed_limit_kbps: 0, auto_retry: 3, link_rules: {}, skip_cellular: false, proxy: "", onboarded: false, sound: true, schedule: [], after_command: "", webhook_url: "", quarantine: true, keychain: false, token: "d3adbeefcafe0123456789abcdef0123456789abcd" };
+const settings: Settings = { dest_dir: "/Users/you/Downloads", enabled_links: null, conns_per_route: 8, max_active: 3, speed_limit_kbps: 0, auto_retry: 3, link_rules: {}, skip_cellular: false, proxy: "", onboarded: false, sound: true, schedule: [], after_command: "", webhook_url: "", quarantine: true, keychain: false, hls_to_mp4: true, token: "d3adbeefcafe0123456789abcdef0123456789abcd" };
 const timers = new Map<string, number>();
 let autostart = false;
 
@@ -92,6 +92,14 @@ export const mock = {
         urls.forEach((u) => { const it = seed(u.split("/").pop() || "download", 300e6, "queued", 0); handlers?.item({ ...it }); setTimeout(() => run(it), 300); });
         return { added: urls.length, duplicates: 0, skipped: 0 };
       }
+      case "list_hls_variants":
+        return /master/.test(String(args.url))
+          ? [
+              { url: "https://v.example/1080/index.m3u8", bandwidth: 5000000, width: 1920, height: 1080, label: "1080p · 5.0 Mbps" },
+              { url: "https://v.example/720/index.m3u8", bandwidth: 2800000, width: 1280, height: 720, label: "720p · 2.8 Mbps" },
+              { url: "https://v.example/360/index.m3u8", bandwidth: 800000, width: 640, height: 360, label: "360p · 0.8 Mbps" },
+            ]
+          : [];
       case "grab_links": {
         const base = String(args.url).replace(/\/[^/]*$/, "");
         return ["release-1.0.zip", "release-1.1.zip", "manual.pdf", "demo.mp4", "notes.txt"].map((f) => ({ url: `${base}/${f}`, text: f }));
