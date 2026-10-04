@@ -59,6 +59,8 @@ cargo run -p grabnr-cli -- get URL --only en0,en5 --limit 20 --checksum sha256:<
 cargo run -p grabnr-cli -- get URL --mirror https://mirror.example/file --proxy socks5://127.0.0.1:1080
 cargo run -p grabnr-cli -- get https://example.org/file.meta4   # a Metalink file adds its mirrors and hash
 cargo run -p grabnr-cli -- get https://example.org/video.m3u8 --quality 720   # a streaming video, split over every link
+cargo run -p grabnr-cli -- get ftp://ftp.gnu.org/gnu/hello/hello-2.12.1.tar.gz   # FTP, split over every link
+cargo run -p grabnr-cli -- get sftp://user@host/path/file.iso    # SFTP (password in the link, or a key via the app's settings)
 cargo run -p grabnr-cli -- spike --secs 8
 ```
 

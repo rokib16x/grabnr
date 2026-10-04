@@ -146,6 +146,9 @@ pub struct Settings {
     /// Keep sign-in headers and proxy passwords in the macOS Keychain instead of the data files.
     #[serde(default)]
     pub keychain: bool,
+    /// Private key file for `sftp://` links (the password in the link is then its passphrase). Empty to sign in with a password.
+    #[serde(default)]
+    pub ssh_key: String,
     /// Turn downloaded HLS videos into MP4 files when ffmpeg is installed.
     #[serde(default = "yes")]
     pub hls_to_mp4: bool,
@@ -213,6 +216,7 @@ pub struct SettingsPatch {
     pub quarantine: Option<bool>,
     pub keychain: Option<bool>,
     pub hls_to_mp4: Option<bool>,
+    pub ssh_key: Option<String>,
 }
 
 pub struct AddRequest {
@@ -315,6 +319,7 @@ impl Manager {
                 quarantine: true,
                 keychain: false,
                 hls_to_mp4: true,
+                ssh_key: String::new(),
             });
         #[cfg(target_os = "macos")]
         let backend: Box<dyn crate::secrets::SecretStore> = Box::new(crate::secrets::Keychain);
@@ -465,6 +470,9 @@ impl Manager {
             if let Some(v) = p.quarantine {
                 g.settings.quarantine = v;
             }
+            if let Some(v) = p.ssh_key {
+                g.settings.ssh_key = v.trim().to_string();
+            }
             if let Some(v) = p.hls_to_mp4 {
                 g.settings.hls_to_mp4 = v;
             }
@@ -577,8 +585,8 @@ impl Manager {
     /// The server must still report the same file; if not, the engine starts over by itself.
     pub fn update_link(self: &Arc<Self>, id: &str, url: &str) -> Result<(), String> {
         let url = url.trim();
-        if !(url.starts_with("http://") || url.starts_with("https://")) || url::Url::parse(url).is_err() {
-            return Err("Enter a full http:// or https:// link".into());
+        if !grabnr_core::links::downloadable(url) {
+            return Err("Enter a full http://, https://, ftp:// or sftp:// link".into());
         }
         {
             let mut g = self.inner.lock().unwrap();
@@ -772,9 +780,26 @@ impl Manager {
         };
         self.set_status(&item.id, Status::Downloading, None);
 
-        let mut opts = Options::new(item.url.clone(), &item.dir, self.routes());
+        let mut headers = item.headers.clone();
+        let mut url = item.url.clone();
+        if grabnr_core::is_remote(&url) {
+            // FTP and SFTP sign in through the link itself; the stored link and the Authorization header never held the
+            // password in the clear, so rebuild it here, just for the engine.
+            if let Some(i) = headers.iter().position(|(k, _)| k.eq_ignore_ascii_case("authorization")) {
+                if let Some((u, p)) = basic_credentials(&headers[i].1) {
+                    url = with_userinfo(&url, &u, &p);
+                }
+                headers.remove(i);
+            }
+        }
+        let (ssh_key, known_hosts) = {
+            let g = self.inner.lock().unwrap();
+            (Some(PathBuf::from(&g.settings.ssh_key)).filter(|p| !p.as_os_str().is_empty()), self.data_dir.join("known_hosts"))
+        };
+        let mut opts = Options::new(url, &item.dir, self.routes());
+        opts.ssh = grabnr_core::sftp::SshOptions { known_hosts: Some(known_hosts), key: ssh_key };
         opts.filename = item.filename.clone();
-        opts.headers = item.headers.clone();
+        opts.headers = headers;
         opts.conns_per_route = conns;
         opts.store = Some(self.store.clone());
         // Keyed by the download, not its link, so a replaced link keeps the partial file.
@@ -1209,6 +1234,41 @@ fn split_url(u: &str) -> Option<(String, String)> {
     Some((u.host_str()?.to_ascii_lowercase(), u.path().to_string()))
 }
 
+/// Split `user:password@` out of a link, so it can be kept apart from the link that is shown and stored.
+pub fn split_userinfo(link: &str) -> (String, Option<(String, String)>) {
+    let Ok(mut u) = url::Url::parse(link) else { return (link.to_string(), None) };
+    if u.username().is_empty() && u.password().is_none() {
+        return (link.to_string(), None);
+    }
+    let dec = |s: &str| {
+        url::form_urlencoded::parse(format!("x={}", s.replace('+', "%2B")).as_bytes())
+            .next()
+            .map(|(_, v)| v.into_owned())
+            .unwrap_or_default()
+    };
+    let creds = (dec(u.username()), dec(u.password().unwrap_or("")));
+    let _ = u.set_username("");
+    let _ = u.set_password(None);
+    (u.to_string(), Some(creds))
+}
+
+/// Put credentials back into a link (percent-encoded), for the engine only.
+pub fn with_userinfo(link: &str, user: &str, pass: &str) -> String {
+    let Ok(mut u) = url::Url::parse(link) else { return link.to_string() };
+    let _ = u.set_username(user);
+    let _ = u.set_password(if pass.is_empty() { None } else { Some(pass) });
+    u.to_string()
+}
+
+/// `user:password` from an `Authorization: Basic ...` value.
+pub fn basic_credentials(value: &str) -> Option<(String, String)> {
+    use base64::Engine as _;
+    let b = value.strip_prefix("Basic ")?;
+    let raw = String::from_utf8(base64::engine::general_purpose::STANDARD.decode(b.trim()).ok()?).ok()?;
+    let (u, p) = raw.split_once(':').unwrap_or((raw.as_str(), ""));
+    Some((u.to_string(), p.to_string()))
+}
+
 /// The command that puts this computer to sleep.
 fn sleep_command() -> std::process::Command {
     #[cfg(target_os = "macos")]
@@ -1321,6 +1381,23 @@ mod tests {
         let mut notfound = old;
         notfound.error = Some("server returned HTTP 404".into());
         assert!(Manager::relink_target(&[notfound], new, None).is_none(), "a 404 is not an expired link");
+    }
+
+    #[test]
+    fn passwords_are_kept_out_of_the_stored_link() {
+        let (clean, creds) = split_userinfo("ftp://me:p%40ss%2Bw@files.example:2121/pub/a.iso");
+        assert_eq!(clean, "ftp://files.example:2121/pub/a.iso");
+        assert_eq!(creds, Some(("me".to_string(), "p@ss+w".to_string())));
+        assert_eq!(split_userinfo("https://x/y"), ("https://x/y".to_string(), None));
+        // Round trip into the engine's form and back.
+        let back = with_userinfo(&clean, "me", "p@ss+w");
+        assert_eq!(split_userinfo(&back).1, creds);
+        let header = format!("Basic {}", {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD.encode("me:p@ss+w")
+        });
+        assert_eq!(basic_credentials(&header), creds);
+        assert_eq!(basic_credentials("Bearer abc"), None);
     }
 
     #[test]

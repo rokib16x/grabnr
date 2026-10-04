@@ -57,6 +57,7 @@ export type Settings = {
   quarantine: boolean;
   keychain: boolean;
   hls_to_mp4: boolean;
+  ssh_key: string;
 };
 
 export type ScheduleMode = { kind: "pause" } | { kind: "limit"; kbps: number } | { kind: "full" };

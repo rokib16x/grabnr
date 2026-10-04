@@ -18,7 +18,7 @@ Anything marked built has not yet been proven on two real links with different g
 
 ## 2. Download engine
 - [x] HTTP/HTTPS over HTTP/1.1 (HTTP/2 is avoided on purpose: it would put every worker on one TCP connection)
-- [ ] FTP, SFTP (needs a client that uses interface-bound sockets)
+- [x] FTP (plain, passive mode, no TLS) and SFTP (password or key, host keys trusted on first use), both through interface-bound sockets and split into pieces over every link
 - [x] Range probe with single-connection fallback
 - [x] 1-8 MB chunks, shared work-stealing queue
 - [x] Persistent connections per link, grown and shrunk automatically

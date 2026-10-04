@@ -131,6 +131,10 @@ export function SettingsPanel({ settings, apiPort, apiOk, keychainAvailable, onC
             Mark finished files as downloaded from the internet (macOS checks apps before they first open)
           </label>
           <div className="field">
+            <span>SFTP private key</span>
+            <input defaultValue={settings.ssh_key} placeholder="Optional path to a key file, for sftp:// links" spellCheck={false} onBlur={(e) => e.target.value !== settings.ssh_key && patch({ ssh_key: e.target.value })} />
+          </div>
+          <div className="field">
             <span>Webhook</span>
             <input defaultValue={settings.webhook_url} placeholder="Optional URL that receives a JSON event for each finished or failed download" spellCheck={false} onBlur={(e) => e.target.value !== settings.webhook_url && patch({ webhook_url: e.target.value })} />
           </div>

@@ -88,6 +88,7 @@ mod tests {
             quarantine: true,
             keychain: false,
             hls_to_mp4: true,
+            ssh_key: String::new(),
             schedule: vec![],
             after_command: "echo done".into(),
             webhook_url: "https://hooks.example/x".into(),

@@ -88,9 +88,11 @@ fn get_state(m: Mgr) -> AppState {
 /// Turn the form's extras into an `AddRequest` for one URL.
 fn build_request(url: String, o: &AddOptions) -> Result<AddRequest, String> {
     let url = url.trim().to_string();
-    if !(url.starts_with("http://") || url.starts_with("https://")) {
-        return Err("Enter a full http:// or https:// link".into());
+    if !grabnr_core::links::downloadable(&url) {
+        return Err("Enter a full http://, https://, ftp:// or sftp:// link".into());
     }
+    // A user name and password typed into the link are kept apart from it, so they never show up in the list.
+    let (url, link_creds) = manager::split_userinfo(&url);
     if let Some(c) = o.checksum.as_deref().filter(|c| !c.trim().is_empty()) {
         grabnr_core::Checksum::parse(c).map_err(|e| e.to_string())?;
     }
@@ -101,6 +103,9 @@ fn build_request(url: String, o: &AddOptions) -> Result<AddRequest, String> {
         }
     }
     let mut headers = Vec::new();
+    if let Some((user, pass)) = link_creds {
+        headers.push(("Authorization".to_string(), grabnr_core::Auth::Basic { user, pass }.header_value()));
+    }
     if let Some(t) = o.token.as_ref().filter(|t| !t.trim().is_empty()) {
         headers.push(("Authorization".to_string(), grabnr_core::Auth::Bearer(t.trim().to_string()).header_value()));
     } else if let Some(user) = o.username.as_ref().filter(|u| !u.is_empty()) {

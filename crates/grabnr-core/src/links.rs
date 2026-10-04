@@ -2,7 +2,12 @@
 
 use url::Url;
 
-/// One URL per line. Blank lines and `#` comments are skipped, duplicates dropped, and only http(s) is kept.
+/// Links grabnr can download: web (http, https), FTP and SFTP.
+pub fn downloadable(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|u| matches!(u.scheme(), "http" | "https" | "ftp" | "sftp"))
+}
+
+/// One URL per line. Blank lines and `#` comments are skipped, duplicates dropped, and only downloadable links are kept.
 pub fn parse_url_list(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for line in text.lines() {
@@ -11,7 +16,7 @@ pub fn parse_url_list(text: &str) -> Vec<String> {
             continue;
         }
         if let Ok(u) = Url::parse(l) {
-            if matches!(u.scheme(), "http" | "https") && !out.iter().any(|x| x == u.as_str()) {
+            if downloadable(u.as_str()) && !out.iter().any(|x| x == u.as_str()) {
                 out.push(u.to_string());
             }
         }
@@ -128,9 +133,9 @@ mod tests {
     #[test]
     fn url_lists() {
         let l = parse_url_list(
-            "# my files\nhttps://a.example/1.zip\n\n  http://b.example/2.zip  \nftp://nope/3\nnot a url\nhttps://a.example/1.zip\n",
+            "# my files\nhttps://a.example/1.zip\n\n  http://b.example/2.zip  \nftp://files.example/3.iso\nmailto:x@y.z\nnot a url\nhttps://a.example/1.zip\n",
         );
-        assert_eq!(l, vec!["https://a.example/1.zip", "http://b.example/2.zip"]);
+        assert_eq!(l, vec!["https://a.example/1.zip", "http://b.example/2.zip", "ftp://files.example/3.iso"]);
     }
 
     #[test]

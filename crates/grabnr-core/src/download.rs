@@ -96,6 +96,8 @@ pub struct Options {
     /// Stable name for the resume state. Without it the link and file name are used, so changing the link starts over;
     /// with it a replaced link (for example a new signed URL) can carry on with the same partial file.
     pub resume_key: Option<String>,
+    /// SSH settings for `sftp://` links: where host keys are remembered and an optional private key.
+    pub ssh: crate::sftp::SshOptions,
     /// Which stream of an HLS master playlist to download.
     pub hls_quality: crate::hls::Quality,
     /// ffmpeg to turn a downloaded HLS transport stream into an MP4 without re-encoding; none leaves a `.ts`.
@@ -129,6 +131,7 @@ impl Options {
             no_link_grace: Duration::from_secs(30),
             mirrors: Vec::new(),
             resume_key: None,
+            ssh: crate::sftp::SshOptions::default(),
             hls_quality: crate::hls::Quality::Best,
             ffmpeg: None,
         }
@@ -200,6 +203,8 @@ const CHECKPOINT: u64 = 1 << 20;
 
 pub(crate) struct RouteState {
     name: String,
+    /// How to reach the network through this link (FTP opens its own sockets from it).
+    def: Route,
     /// Most connections this link may open.
     max: usize,
     pub(crate) bytes: AtomicU64,
@@ -224,6 +229,7 @@ impl RouteState {
         let max = max_conns(opts, r);
         RouteState {
             name: r.name.clone(),
+            def: r.clone(),
             max,
             bytes: AtomicU64::new(bytes),
             allowed: AtomicUsize::new(Ramp::new(max, opts.adaptive).allowed),
@@ -286,6 +292,8 @@ impl Shared {
 }
 
 struct Ctx {
+    /// Set when the file is on an FTP server rather than behind HTTP.
+    remote: Option<crate::remote::Target>,
     /// The file's URLs, primary first. Workers spread over them and move on when one fails.
     urls: Vec<String>,
     /// Request headers per URL (same order as `urls`): credentials only go to the host the user gave.
@@ -302,6 +310,7 @@ struct Ctx {
     emit: Emit,
     max_attempts: u32,
     stall_timeout: Duration,
+    ssh: crate::sftp::SshOptions,
 }
 
 impl Ctx {
@@ -355,7 +364,13 @@ pub async fn download(mut opts: Options, cancel: CancellationToken, emit: Emit) 
     // Probe on the first route that answers; a dead link must not block the download.
     let mut probed: Option<(usize, Probe)> = None;
     let mut last: Option<Error> = None;
-    for (i, c) in clients.iter().enumerate() {
+    if crate::remote::looks_like(&opts.url) {
+        match remote_probe(&opts).await {
+            Ok(p) => probed = Some(p),
+            Err(e) => last = Some(e),
+        }
+    }
+    for (i, c) in clients.iter().enumerate().filter(|_| probed.is_none() && !crate::remote::looks_like(&opts.url)) {
         match probe(c, &opts.url, &headers).await {
             Ok(p) => {
                 probed = Some((i, p));
@@ -457,11 +472,13 @@ async fn ranged(
 
     emit(Event::Started { filename: filename.into(), total: Some(total), chunks: ranges.len(), ranges: true, resumed_chunks: done.len() });
 
-    let urls = usable_urls(opts, probe, &clients).await;
+    let remote = crate::remote::looks_like(&opts.url).then(|| crate::remote::parse(&opts.url).ok()).flatten();
+    let urls = if remote.is_some() { vec![probe.final_url.clone()] } else { usable_urls(opts, probe, &clients).await };
     let ctx = Arc::new(Ctx {
+        remote: remote.clone(),
         headers: urls.iter().map(|u| headers_for(&opts.headers, &opts.url, u)).collect(),
         urls,
-        validator: probe.validator().map(str::to_owned),
+        validator: if remote.is_some() { None } else { probe.validator().map(str::to_owned) },
         sched,
         file,
         store: opts.store.clone(),
@@ -473,6 +490,7 @@ async fn ranged(
         emit: emit.clone(),
         max_attempts: opts.max_attempts,
         stall_timeout: opts.stall_timeout,
+        ssh: opts.ssh.clone(),
     });
 
     let ticker = spawn_ticker(shared.clone(), emit.clone());
@@ -687,6 +705,8 @@ async fn worker(ctx: Arc<Ctx>, route: usize, wid: usize, client: Client, rs: Arc
     let mut fails = 0u32;
     // Spread connections over the mirrors; a failing URL passes the baton to the next one.
     let mut url_idx = (route + wid) % ctx.urls.len();
+    // This worker's own connection when the file is on an FTP server.
+    let mut remote: Option<crate::remote::Session> = None;
     loop {
         if ctx.abort.is_cancelled() || rs.stop.is_cancelled() || ctx.sched.finished() {
             break;
@@ -705,7 +725,7 @@ async fn worker(ctx: Arc<Ctx>, route: usize, wid: usize, client: Client, rs: Arc
             Lease::Chunk { idx, start, end, .. } => (idx, start, end),
         };
         rs.active.fetch_add(1, Ordering::Relaxed);
-        let r = fetch_chunk(&ctx, &client, route, &rs, url_idx, idx, start, end).await;
+        let r = fetch_chunk(&ctx, &client, route, &rs, url_idx, idx, start, end, &mut remote).await;
         rs.active.fetch_sub(1, Ordering::Relaxed);
         match r {
             Ok(Outcome::Won) => fails = 0,
@@ -775,6 +795,9 @@ async fn sleep_or_stop(rs: &RouteState, d: Duration) {
     }
 }
 
+/// Bytes of one piece as they arrive. Errors are text because HTTP and FTP fail in different ways.
+type ByteStream = std::pin::Pin<Box<dyn futures_util::Stream<Item = std::result::Result<bytes::Bytes, String>> + Send>>;
+
 #[allow(clippy::too_many_arguments)]
 async fn fetch_chunk(
     ctx: &Ctx,
@@ -785,11 +808,37 @@ async fn fetch_chunk(
     idx: usize,
     start: u64,
     end: u64,
+    remote: &mut Option<crate::remote::Session>,
 ) -> std::result::Result<Outcome, FetchErr> {
-    let mirror = url_idx != 0;
     // Carry on from where an earlier attempt (or an earlier run) stopped inside this chunk.
     let (have, seed_crc) = ctx.sched.have(idx);
     let from = start + have;
+    let stream = match &ctx.remote {
+        Some(t) => open_remote(ctx, t, rs, remote, from, end).await?,
+        None => open_http(ctx, client, rs, url_idx, from, end).await?,
+    };
+    let out = consume(ctx, route, rs, idx, end, have, seed_crc, from, stream).await;
+    // A remote transfer that stopped early leaves a reply pending; read it so the connection can be reused.
+    if let Some(s) = remote.as_mut() {
+        if !s.end_transfer().await {
+            *remote = None;
+        }
+    }
+    if out.is_err() {
+        *remote = None;
+    }
+    out
+}
+
+async fn open_http(
+    ctx: &Ctx,
+    client: &Client,
+    rs: &RouteState,
+    url_idx: usize,
+    from: u64,
+    end: u64,
+) -> std::result::Result<ByteStream, FetchErr> {
+    let mirror = url_idx != 0;
     let mut req = client.get(&ctx.urls[url_idx]).headers(ctx.headers[url_idx].clone()).header(RANGE, format!("bytes={from}-{end}"));
     // The validator belongs to the primary URL; a mirror may have different ETags for identical bytes.
     if let (Some(v), false) = (&ctx.validator, mirror) {
@@ -814,8 +863,50 @@ async fn fetch_chunk(
         s if mirror => return Err(FetchErr::Retry(format!("mirror answered HTTP {s}"))),
         s => return Err(FetchErr::Fatal(Error::Status(s.as_u16()))),
     }
+    Ok(Box::pin(resp.bytes_stream().map(|r| r.map_err(|e| e.to_string()))))
+}
 
-    let mut stream = resp.bytes_stream();
+/// Open (or reuse) this worker's connection to the server and start reading at `from`, up to `end`.
+async fn open_remote(
+    ctx: &Ctx,
+    t: &crate::remote::Target,
+    rs: &RouteState,
+    session: &mut Option<crate::remote::Session>,
+    from: u64,
+    end: u64,
+) -> std::result::Result<ByteStream, FetchErr> {
+    use tokio::io::AsyncReadExt;
+    let fail = |e: Error| match e {
+        Error::Status(401) | Error::Status(404) => FetchErr::Fatal(e),
+        other => FetchErr::Retry(other.to_string()),
+    };
+    if session.is_none() {
+        let s = tokio::select! {
+            _ = rs.stop.cancelled() => return Err(FetchErr::Cancelled),
+            s = crate::remote::Session::connect(t, &rs.def, ctx.stall_timeout, &ctx.ssh) => s.map_err(fail)?,
+        };
+        *session = Some(s);
+    }
+    let reader = tokio::select! {
+        _ = rs.stop.cancelled() => return Err(FetchErr::Cancelled),
+        r = session.as_mut().expect("connected above").open_range(t, from, end - from + 1) => r.map_err(fail)?,
+    };
+    let limited = reader.take(end - from + 1);
+    Ok(Box::pin(tokio_util::io::ReaderStream::with_capacity(limited, 64 * 1024).map(|r| r.map_err(|e| e.to_string()))))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn consume(
+    ctx: &Ctx,
+    route: usize,
+    rs: &RouteState,
+    idx: usize,
+    end: u64,
+    have: u64,
+    seed_crc: u32,
+    from: u64,
+    mut stream: ByteStream,
+) -> std::result::Result<Outcome, FetchErr> {
     let (mut pos, mut got) = (from, 0u64);
     let mut crc = crc32fast::Hasher::new_with_initial_len(seed_crc, have);
     let mut last_saved = 0u64;
@@ -1129,6 +1220,39 @@ fn verify_partial(path: &Path, ranges: &[(u64, u64)], partial: &[PartialChunk]) 
         }
     }
     (good, bad)
+}
+
+/// Look at a file on an FTP server through the first link that can reach it.
+async fn remote_probe(opts: &Options) -> Result<(usize, Probe)> {
+    let target = crate::remote::parse(&opts.url)?;
+    let mut last: Option<Error> = None;
+    for (i, route) in opts.routes.iter().enumerate() {
+        let attempt = async {
+            let mut s = crate::remote::Session::connect(&target, route, opts.stall_timeout, &opts.ssh).await?;
+            let stat = s.stat(&target).await?;
+            Ok::<_, Error>(stat)
+        };
+        match attempt.await {
+            Ok(stat) => {
+                let name = target.path().rsplit('/').next().unwrap_or("download").to_string();
+                return Ok((
+                    i,
+                    Probe {
+                        final_url: opts.url.clone(),
+                        total: Some(stat.size),
+                        ranges: true,
+                        etag: None,
+                        last_modified: stat.modified,
+                        filename: sanitize(&name),
+                    },
+                ));
+            }
+            // A wrong password or missing file will not get better on another link.
+            Err(e @ (Error::Status(401) | Error::Status(404))) => return Err(e),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| Error::Other("no network routes selected".into())))
 }
 
 #[cfg(test)]

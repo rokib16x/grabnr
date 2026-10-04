@@ -4,7 +4,7 @@ import { Icon } from "./icons";
 import type { AddOptions, HlsVariant, PageLink } from "./types";
 
 const folderName = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
-const isUrl = (s: string) => /^https?:\/\/\S+$/i.test(s);
+const isUrl = (s: string) => /^(https?|s?ftp):\/\/\S+$/i.test(s);
 
 export function AddDialog({ defaultDir, onClose }: { defaultDir?: string; onClose: () => void }) {
   const [text, setText] = useState("");
@@ -248,7 +248,7 @@ export function AddDialog({ defaultDir, onClose }: { defaultDir?: string; onClos
           </div>
         )}
         <p className="hint">
-          {many ? `${urls.length} links will be added.` : "grabnr splits the file into chunks and pulls them over every connection you have enabled in Manage Connections. Metalink files (.meta4) add their mirrors and checksum automatically."}
+          {many ? `${urls.length} links will be added.` : urls[0] && /^ftp:/i.test(urls[0]) ? "FTP sends the password without encryption. Use sftp:// if the server offers it." : "grabnr splits the file into chunks and pulls them over every connection you have enabled in Manage Connections. Metalink files (.meta4) add their mirrors and checksum automatically."}
         </p>
 
         {err && <p className="err" role="alert">{err}</p>}

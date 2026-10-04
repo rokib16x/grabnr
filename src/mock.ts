@@ -5,7 +5,7 @@ type Handlers = { item: (i: Item) => void; removed: (id: string) => void; event:
 
 let handlers: Handlers | null = null;
 const items: Item[] = [];
-const settings: Settings = { dest_dir: "/Users/you/Downloads", enabled_links: null, conns_per_route: 8, max_active: 3, speed_limit_kbps: 0, auto_retry: 3, link_rules: {}, skip_cellular: false, proxy: "", onboarded: false, sound: true, schedule: [], after_command: "", webhook_url: "", quarantine: true, keychain: false, hls_to_mp4: true, token: "d3adbeefcafe0123456789abcdef0123456789abcd" };
+const settings: Settings = { dest_dir: "/Users/you/Downloads", enabled_links: null, conns_per_route: 8, max_active: 3, speed_limit_kbps: 0, auto_retry: 3, link_rules: {}, skip_cellular: false, proxy: "", onboarded: false, sound: true, schedule: [], after_command: "", webhook_url: "", quarantine: true, keychain: false, hls_to_mp4: true, ssh_key: "", token: "d3adbeefcafe0123456789abcdef0123456789abcd" };
 const timers = new Map<string, number>();
 let autostart = false;
 

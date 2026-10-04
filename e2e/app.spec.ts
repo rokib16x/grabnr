@@ -151,3 +151,17 @@ test("a streaming link offers a choice of quality", async ({ page }) => {
   await page.getByRole("button", { name: "Add Download", exact: true }).last().click();
   await expect(row(page, "master.m3u8")).toBeVisible();
 });
+
+test("FTP and SFTP links are accepted, with a warning about plain FTP", async ({ page }) => {
+  await open(page);
+  await page.getByRole("button", { name: "Add download" }).click();
+  await page.getByLabel("Links").fill("ftp://files.example.com/pub/archive.tar.gz");
+  await expect(page.getByText("FTP sends the password without encryption")).toBeVisible();
+  await page.getByRole("button", { name: "Add Download", exact: true }).last().click();
+  await expect(row(page, "archive.tar.gz")).toBeVisible();
+  await page.getByRole("button", { name: "Add download" }).click();
+  await page.getByLabel("Links").fill("sftp://me@host.example/home/me/backup.zip");
+  await expect(page.getByText("FTP sends the password")).toHaveCount(0);
+  await page.getByRole("button", { name: "Add Download", exact: true }).last().click();
+  await expect(row(page, "backup.zip").first()).toBeVisible();
+});
