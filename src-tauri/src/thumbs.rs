@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 pub fn cache_file(dir: &Path, id: &str) -> PathBuf {
     // Ids are hex, but never trust a name that ends up in a path.
     let safe: String = id.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
