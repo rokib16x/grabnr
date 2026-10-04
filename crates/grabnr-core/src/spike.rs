@@ -120,14 +120,8 @@ pub async fn run(links: &[Link], url: &str, secs: u64) -> SpikeReport {
         reports.push(LinkReport { link: link.name.clone(), modes, solo });
     }
 
-    let usable: Vec<&Link> = links
-        .iter()
-        .filter(|l| reports.iter().any(|r| r.link == l.name && r.solo.error.is_none()))
-        .collect();
-    let combined = futures_util::future::join_all(
-        usable.iter().map(|l| measure(l, BindMode::BoundIf, url, secs)),
-    )
-    .await;
+    let usable: Vec<&Link> = links.iter().filter(|l| reports.iter().any(|r| r.link == l.name && r.solo.error.is_none())).collect();
+    let combined = futures_util::future::join_all(usable.iter().map(|l| measure(l, BindMode::BoundIf, url, secs))).await;
     let combined_mbps = combined.iter().map(|t| t.mbps).sum();
     let best_solo_mbps = reports.iter().map(|r| r.solo.mbps).fold(0.0, f64::max);
 

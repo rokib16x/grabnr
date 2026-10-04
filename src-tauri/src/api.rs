@@ -74,7 +74,8 @@ const BLOCKED: [&str; 8] = ["host", "content-length", "range", "if-range", "conn
 
 fn handle(m: &Arc<Manager>, mut req: Request) {
     let origin = header(&req, "origin");
-    let host_ok = header(&req, "host").is_some_and(|h| h == format!("127.0.0.1:{}", crate::manager::API_PORT) || h == format!("localhost:{}", crate::manager::API_PORT));
+    let host_ok = header(&req, "host")
+        .is_some_and(|h| h == format!("127.0.0.1:{}", crate::manager::API_PORT) || h == format!("localhost:{}", crate::manager::API_PORT));
     // Host check blocks DNS-rebinding; Origin check blocks web pages.
     if !host_ok || origin.as_deref().is_some_and(|o| !extension_origin(o)) {
         return reply(req, 403, json!({"error": "forbidden"}), None);
@@ -84,7 +85,9 @@ fn handle(m: &Arc<Manager>, mut req: Request) {
 
     match (req.method().clone(), path.as_str()) {
         (Method::Options, _) => reply(req, 204, json!(null), cors),
-        (Method::Get, "/ping") => reply(req, 200, json!({"app": "grabnr", "version": env!("CARGO_PKG_VERSION"), "paired": m.paired()}), cors),
+        (Method::Get, "/ping") => {
+            reply(req, 200, json!({"app": "grabnr", "version": env!("CARGO_PKG_VERSION"), "paired": m.paired()}), cors)
+        }
         (Method::Get, "/pair") => match m.pairing_token() {
             Some(t) => reply(req, 200, json!({"token": t}), cors),
             None => reply(req, 403, json!({"error": "pairing_closed"}), cors),
@@ -117,7 +120,15 @@ fn handle(m: &Arc<Manager>, mut req: Request) {
                     headers.push((name.into(), v));
                 }
             }
-            let (id, duplicate) = m.add(AddRequest { url: b.url, filename: b.filename, headers, dir: None, checksum: None, proxy: None, mirrors: Vec::new() });
+            let (id, duplicate) = m.add(AddRequest {
+                url: b.url,
+                filename: b.filename,
+                headers,
+                dir: None,
+                checksum: None,
+                proxy: None,
+                mirrors: Vec::new(),
+            });
             reply(req, 200, json!({"id": id, "duplicate": duplicate}), cors)
         }
         _ => reply(req, 404, json!({"error": "not found"}), cors),

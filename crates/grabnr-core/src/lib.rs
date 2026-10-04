@@ -20,9 +20,9 @@ pub mod store;
 pub mod writer;
 
 pub use auth::Auth;
-pub use checksum::{Algo, Checksum};
 pub use bind::{client_for, client_pooled, BindMode};
+pub use checksum::{Algo, Checksum};
 pub use download::{download, Event, Options, Route, Snapshot};
 pub use error::{Error, Result};
-pub use store::Store;
 pub use interfaces::{list_links, Link, LinkKind};
+pub use store::Store;

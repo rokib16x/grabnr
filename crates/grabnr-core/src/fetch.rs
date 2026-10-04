@@ -8,7 +8,12 @@ use crate::bind::{client_via_proxy, BindMode};
 use crate::error::{Error, Result};
 
 /// GET a text document over the default route. Returns the body and its Content-Type.
-pub async fn fetch_text(url: &str, headers: &[(String, String)], proxy: Option<&str>, max_bytes: usize) -> Result<(String, Option<String>)> {
+pub async fn fetch_text(
+    url: &str,
+    headers: &[(String, String)],
+    proxy: Option<&str>,
+    max_bytes: usize,
+) -> Result<(String, Option<String>)> {
     let client = client_via_proxy(None, BindMode::None, proxy)?;
     let mut req = client.get(url);
     for (k, v) in headers {

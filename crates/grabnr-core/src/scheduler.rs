@@ -28,7 +28,12 @@ pub fn plan(total: u64, chunk: u64) -> Vec<(u64, u64)> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lease {
-    Chunk { idx: usize, start: u64, end: u64, raced: bool },
+    Chunk {
+        idx: usize,
+        start: u64,
+        end: u64,
+        raced: bool,
+    },
     /// Nothing to take right now, but the download is not finished.
     Wait,
     Finished,

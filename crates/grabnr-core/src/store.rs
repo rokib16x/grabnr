@@ -43,20 +43,16 @@ impl Store {
     pub fn load(&self, id: &str) -> Result<Option<(Record, Vec<usize>)>> {
         let c = self.0.lock().unwrap();
         let rec = c
-            .query_row(
-                "SELECT id,url,total,etag,last_modified,chunk_size FROM downloads WHERE id=?1",
-                [id],
-                |r| {
-                    Ok(Record {
-                        id: r.get(0)?,
-                        url: r.get(1)?,
-                        total: r.get::<_, i64>(2)? as u64,
-                        etag: r.get(3)?,
-                        last_modified: r.get(4)?,
-                        chunk_size: r.get::<_, i64>(5)? as u64,
-                    })
-                },
-            )
+            .query_row("SELECT id,url,total,etag,last_modified,chunk_size FROM downloads WHERE id=?1", [id], |r| {
+                Ok(Record {
+                    id: r.get(0)?,
+                    url: r.get(1)?,
+                    total: r.get::<_, i64>(2)? as u64,
+                    etag: r.get(3)?,
+                    last_modified: r.get(4)?,
+                    chunk_size: r.get::<_, i64>(5)? as u64,
+                })
+            })
             .optional()?;
         let Some(rec) = rec else { return Ok(None) };
         let mut stmt = c.prepare("SELECT idx FROM done_chunks WHERE id=?1 ORDER BY idx")?;

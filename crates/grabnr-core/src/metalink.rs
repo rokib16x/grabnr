@@ -38,7 +38,12 @@ pub fn parse(xml: &str) -> Result<Metalink> {
         match r.read_event().map_err(|e| Error::Other(format!("not a valid Metalink file: {e}")))? {
             Xml::Start(e) => {
                 let tag = String::from_utf8_lossy(e.local_name().as_ref()).to_lowercase();
-                let attr = |k: &str| e.attributes().flatten().find(|a| a.key.as_ref() == k.as_bytes()).map(|a| String::from_utf8_lossy(&a.value).into_owned());
+                let attr = |k: &str| {
+                    e.attributes()
+                        .flatten()
+                        .find(|a| a.key.as_ref() == k.as_bytes())
+                        .map(|a| String::from_utf8_lossy(&a.value).into_owned())
+                };
                 match tag.as_str() {
                     "file" if !done => {
                         in_file = true;
@@ -47,7 +52,10 @@ pub fn parse(xml: &str) -> Result<Metalink> {
                     "hash" => hash_type = attr("type").unwrap_or_default().to_lowercase().replace('-', ""),
                     "url" => {
                         // v4 uses `priority` (1 = best); v3 uses `preference` (100 = best) and `type`.
-                        prio = attr("priority").and_then(|p| p.parse().ok()).or_else(|| attr("preference").and_then(|p| p.parse::<u32>().ok()).map(|p| 1000 - p.min(1000))).unwrap_or(500);
+                        prio = attr("priority")
+                            .and_then(|p| p.parse().ok())
+                            .or_else(|| attr("preference").and_then(|p| p.parse::<u32>().ok()).map(|p| 1000 - p.min(1000)))
+                            .unwrap_or(500);
                         proto_ok = attr("type").map(|t| matches!(t.to_lowercase().as_str(), "http" | "https")).unwrap_or(true);
                     }
                     _ => {}
@@ -69,7 +77,9 @@ pub fn parse(xml: &str) -> Result<Metalink> {
                             m.hashes.push(Checksum { algo, hex: text.trim().to_ascii_lowercase() });
                         }
                     }
-                    Some("url") if proto_ok && (text.starts_with("http://") || text.starts_with("https://")) => urls.push((prio, text.trim().to_string())),
+                    Some("url") if proto_ok && (text.starts_with("http://") || text.starts_with("https://")) => {
+                        urls.push((prio, text.trim().to_string()))
+                    }
                     _ => {}
                 }
             }

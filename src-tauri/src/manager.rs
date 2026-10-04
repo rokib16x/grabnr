@@ -256,12 +256,21 @@ impl Manager {
                 i.status = Status::Paused;
             }
         }
-        let history: Vec<HistoryRec> = std::fs::read(data_dir.join("history.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        let history: Vec<HistoryRec> =
+            std::fs::read(data_dir.join("history.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
         let m = Arc::new(Manager {
             app,
             data_dir,
             store,
-            inner: Mutex::new(Inner { items, settings, cancels: HashMap::new(), removing: Vec::new(), speeds: HashMap::new(), retry_at: HashMap::new(), runs: HashMap::new() }),
+            inner: Mutex::new(Inner {
+                items,
+                settings,
+                cancels: HashMap::new(),
+                removing: Vec::new(),
+                speeds: HashMap::new(),
+                retry_at: HashMap::new(),
+                runs: HashMap::new(),
+            }),
             pairing_until: Mutex::new(None),
             history: Mutex::new(history),
             api_ok: Mutex::new(false),
@@ -354,7 +363,10 @@ impl Manager {
     pub fn add(self: &Arc<Self>, req: AddRequest) -> (String, bool) {
         let dup = {
             let g = self.inner.lock().unwrap();
-            g.items.iter().find(|i| i.url == req.url && i.dir == req.dir.clone().unwrap_or_else(|| g.settings.dest_dir.clone())).map(|i| (i.id.clone(), i.status))
+            g.items
+                .iter()
+                .find(|i| i.url == req.url && i.dir == req.dir.clone().unwrap_or_else(|| g.settings.dest_dir.clone()))
+                .map(|i| (i.id.clone(), i.status))
         };
         if let Some((id, status)) = dup {
             if matches!(status, Status::Paused | Status::Error) {
@@ -462,15 +474,23 @@ impl Manager {
     }
 
     pub fn pause_all(&self) {
-        let ids: Vec<String> =
-            self.inner.lock().unwrap().items.iter().filter(|i| matches!(i.status, Status::Downloading | Status::Queued)).map(|i| i.id.clone()).collect();
+        let ids: Vec<String> = self
+            .inner
+            .lock()
+            .unwrap()
+            .items
+            .iter()
+            .filter(|i| matches!(i.status, Status::Downloading | Status::Queued))
+            .map(|i| i.id.clone())
+            .collect();
         for id in ids {
             self.pause(&id);
         }
     }
 
     pub fn resume_all(self: &Arc<Self>) {
-        let ids: Vec<String> = self.inner.lock().unwrap().items.iter().filter(|i| i.status == Status::Paused).map(|i| i.id.clone()).collect();
+        let ids: Vec<String> =
+            self.inner.lock().unwrap().items.iter().filter(|i| i.status == Status::Paused).map(|i| i.id.clone()).collect();
         for id in ids {
             self.set_status(&id, Status::Queued, None);
         }
@@ -769,11 +789,16 @@ fn retry_delay(attempt: u32) -> Duration {
 }
 
 /// Highest priority first, then oldest; skips anything already running or still waiting out a retry delay.
-fn pick_next(items: &[Item], running: &HashMap<String, CancellationToken>, retry_at: &HashMap<String, Instant>, now: Instant) -> Option<Item> {
+fn pick_next(
+    items: &[Item],
+    running: &HashMap<String, CancellationToken>,
+    retry_at: &HashMap<String, Instant>,
+    now: Instant,
+) -> Option<Item> {
     items
         .iter()
         .enumerate()
-        .filter(|(_, i)| i.status == Status::Queued && !running.contains_key(&i.id) && retry_at.get(&i.id).map_or(true, |t| *t <= now))
+        .filter(|(_, i)| i.status == Status::Queued && !running.contains_key(&i.id) && retry_at.get(&i.id).is_none_or(|t| *t <= now))
         // items are stored newest first, so a larger index is older
         .max_by_key(|(idx, i)| (i.priority, *idx))
         .map(|(_, i)| i.clone())
@@ -784,7 +809,25 @@ mod tests {
     use super::*;
 
     fn item(id: &str, priority: i32, status: Status) -> Item {
-        Item { id: id.into(), url: format!("https://x/{id}"), filename: None, dir: ".".into(), headers: vec![], status, total: None, downloaded: 0, path: None, error: None, added: 0, checksum: None, priority, retries: 0, proxy: None, mirrors: vec![], stats: Stats::default() }
+        Item {
+            id: id.into(),
+            url: format!("https://x/{id}"),
+            filename: None,
+            dir: ".".into(),
+            headers: vec![],
+            status,
+            total: None,
+            downloaded: 0,
+            path: None,
+            error: None,
+            added: 0,
+            checksum: None,
+            priority,
+            retries: 0,
+            proxy: None,
+            mirrors: vec![],
+            stats: Stats::default(),
+        }
     }
 
     #[test]

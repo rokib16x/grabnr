@@ -115,7 +115,10 @@ fn inner_text(html: &str, lower: &str, from: usize) -> String {
 }
 
 fn file_name(url: &str) -> String {
-    Url::parse(url).ok().and_then(|u| u.path_segments().and_then(|s| s.filter(|p| !p.is_empty()).last().map(str::to_owned))).unwrap_or_else(|| url.to_string())
+    Url::parse(url)
+        .ok()
+        .and_then(|u| u.path_segments().and_then(|mut s| s.rfind(|p| !p.is_empty()).map(str::to_owned)))
+        .unwrap_or_else(|| url.to_string())
 }
 
 #[cfg(test)]
@@ -124,7 +127,9 @@ mod tests {
 
     #[test]
     fn url_lists() {
-        let l = parse_url_list("# my files\nhttps://a.example/1.zip\n\n  http://b.example/2.zip  \nftp://nope/3\nnot a url\nhttps://a.example/1.zip\n");
+        let l = parse_url_list(
+            "# my files\nhttps://a.example/1.zip\n\n  http://b.example/2.zip  \nftp://nope/3\nnot a url\nhttps://a.example/1.zip\n",
+        );
         assert_eq!(l, vec!["https://a.example/1.zip", "http://b.example/2.zip"]);
     }
 

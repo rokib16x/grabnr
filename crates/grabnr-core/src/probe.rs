@@ -38,9 +38,7 @@ pub async fn probe(client: &Client, url: &str, headers: &HeaderMap) -> Result<Pr
         }
         s => return Err(Error::Status(s.as_u16())),
     };
-    let filename = text(CONTENT_DISPOSITION)
-        .and_then(|v| disposition_filename(&v))
-        .unwrap_or_else(|| filename_from_url(&final_url));
+    let filename = text(CONTENT_DISPOSITION).and_then(|v| disposition_filename(&v)).unwrap_or_else(|| filename_from_url(&final_url));
     Ok(Probe { final_url, total, ranges, etag: text(ETAG), last_modified: text(LAST_MODIFIED), filename: sanitize(&filename) })
 }
 
@@ -67,7 +65,11 @@ fn filename_from_url(url: &str) -> String {
     let no_query = url.split(['?', '#']).next().unwrap_or(url);
     let path = no_query.split_once("://").map(|(_, rest)| rest).unwrap_or(no_query);
     let last = path.split_once('/').map(|(_, p)| p.rsplit('/').next().unwrap_or("")).unwrap_or("");
-    if last.is_empty() { "download".into() } else { percent_decode(last) }
+    if last.is_empty() {
+        "download".into()
+    } else {
+        percent_decode(last)
+    }
 }
 
 fn percent_decode(s: &str) -> String {
@@ -92,7 +94,11 @@ fn percent_decode(s: &str) -> String {
 pub fn sanitize(name: &str) -> String {
     let cleaned: String = name.chars().map(|c| if c == '/' || c == '\\' || c.is_control() || c == ':' { '_' } else { c }).collect();
     let cleaned = cleaned.trim().trim_matches('.').to_string();
-    if cleaned.is_empty() { "download".into() } else { cleaned }
+    if cleaned.is_empty() {
+        "download".into()
+    } else {
+        cleaned
+    }
 }
 
 #[cfg(test)]

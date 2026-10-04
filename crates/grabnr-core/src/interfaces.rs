@@ -52,10 +52,7 @@ pub fn list_links() -> Vec<Link> {
             let ip = i.ipv4_addrs().into_iter().find(|a| !a.is_link_local() && !a.is_loopback())?;
             let label = i.friendly_name.clone().or(i.description.clone()).unwrap_or_else(|| i.name.clone());
             let kind = classify(&i.name, i.if_type, &label);
-            let gateway = i
-                .gateway
-                .as_ref()
-                .and_then(|g| g.ipv4.first().map(|a| IpAddr::V4(*a)));
+            let gateway = i.gateway.as_ref().and_then(|g| g.ipv4.first().map(|a| IpAddr::V4(*a)));
             Some(Link {
                 kind,
                 label,

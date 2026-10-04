@@ -147,10 +147,8 @@ async fn main() {
                 }));
             }
             opts.store = Some(Arc::new(Store::open(&db.join("state.db")).expect("open state db")));
-            opts.headers = headers
-                .iter()
-                .filter_map(|h| h.split_once(':').map(|(k, v)| (k.trim().to_string(), v.trim().to_string())))
-                .collect();
+            opts.headers =
+                headers.iter().filter_map(|h| h.split_once(':').map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))).collect();
 
             let cancel = CancellationToken::new();
             let c = cancel.clone();

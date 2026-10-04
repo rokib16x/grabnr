@@ -81,7 +81,10 @@ fn build_request(url: String, o: &AddOptions) -> Result<AddRequest, String> {
     if let Some(t) = o.token.as_ref().filter(|t| !t.trim().is_empty()) {
         headers.push(("Authorization".to_string(), grabnr_core::Auth::Bearer(t.trim().to_string()).header_value()));
     } else if let Some(user) = o.username.as_ref().filter(|u| !u.is_empty()) {
-        headers.push(("Authorization".to_string(), grabnr_core::Auth::Basic { user: user.clone(), pass: o.password.clone().unwrap_or_default() }.header_value()));
+        headers.push((
+            "Authorization".to_string(),
+            grabnr_core::Auth::Basic { user: user.clone(), pass: o.password.clone().unwrap_or_default() }.header_value(),
+        ));
     }
     let mirrors = o.mirrors.as_deref().map(grabnr_core::links::parse_url_list_from_vec).unwrap_or_default();
     Ok(AddRequest { url, filename: o.filename.clone(), headers, dir: o.dir.clone(), checksum: o.checksum.clone(), proxy, mirrors })
@@ -92,14 +95,15 @@ async fn expand_metalink(mut req: AddRequest) -> Result<AddRequest, String> {
     if !grabnr_core::metalink::looks_like(&req.url, None) {
         return Ok(req);
     }
-    let (text, _) = grabnr_core::fetch::fetch_text(&req.url, &req.headers, req.proxy.as_deref(), 2 << 20).await.map_err(|e| e.to_string())?;
+    let (text, _) =
+        grabnr_core::fetch::fetch_text(&req.url, &req.headers, req.proxy.as_deref(), 2 << 20).await.map_err(|e| e.to_string())?;
     let m = grabnr_core::metalink::parse(&text).map_err(|e| e.to_string())?;
     req.url = m.urls[0].clone();
     req.mirrors.extend(m.urls.iter().skip(1).cloned());
-    if req.filename.as_deref().map_or(true, str::is_empty) && !m.name.is_empty() {
+    if req.filename.as_deref().is_none_or(str::is_empty) && !m.name.is_empty() {
         req.filename = Some(m.name.clone());
     }
-    if req.checksum.as_deref().map_or(true, |c| c.trim().is_empty()) {
+    if req.checksum.as_deref().is_none_or(|c| c.trim().is_empty()) {
         req.checksum = m.checksum().map(|c| c.spec());
     }
     Ok(req)

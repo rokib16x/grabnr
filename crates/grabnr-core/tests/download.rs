@@ -386,7 +386,11 @@ async fn survives_every_link_disappearing_for_a_while() {
     let mut o = slow_options(format!("http://127.0.0.1:{}/g.bin", s.port), "gap", vec![Route::unbound("a")]);
     o.link_watch = Some(watch(|t| {
         let ms = t.as_millis();
-        if (300..1000).contains(&ms) { vec![] } else { vec![Route::unbound("a")] }
+        if (300..1000).contains(&ms) {
+            vec![]
+        } else {
+            vec![Route::unbound("a")]
+        }
     }));
     let path = download(o, CancellationToken::new(), silent()).await.unwrap();
     assert_eq!(std::fs::read(path).unwrap(), expected(0));

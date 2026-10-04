@@ -45,9 +45,8 @@ pub fn client_via_proxy(link: Option<&Link>, mode: BindMode, proxy: Option<&str>
 }
 
 fn build(link: Option<&Link>, mode: BindMode, pooled: bool, proxy: Option<&str>) -> Result<reqwest::Client, reqwest::Error> {
-    let mut b = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(8))
-        .user_agent(concat!("grabnr/", env!("CARGO_PKG_VERSION")));
+    let mut b =
+        reqwest::Client::builder().connect_timeout(Duration::from_secs(8)).user_agent(concat!("grabnr/", env!("CARGO_PKG_VERSION")));
     if let Some(p) = proxy.map(str::trim).filter(|p| !p.is_empty()) {
         b = b.proxy(reqwest::Proxy::all(p)?);
     }

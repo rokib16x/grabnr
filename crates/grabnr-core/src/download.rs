@@ -17,9 +17,9 @@ use crate::auth::Auth;
 use crate::bind::{client_via_proxy, BindMode};
 use crate::checksum::{self, Checksum};
 use crate::disk;
-use crate::limiter::Limiter;
 use crate::error::{Error, Result};
 use crate::interfaces::Link;
+use crate::limiter::Limiter;
 use crate::probe::{probe, sanitize, Probe};
 use crate::scheduler::{chunk_size_for, plan, Lease, Scheduler};
 use crate::store::{Record, Store};
@@ -144,15 +144,34 @@ pub struct Snapshot {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
-    Started { filename: String, total: Option<u64>, chunks: usize, ranges: bool, resumed_chunks: usize },
-    ResumeDiscarded { reason: String },
+    Started {
+        filename: String,
+        total: Option<u64>,
+        chunks: usize,
+        ranges: bool,
+        resumed_chunks: usize,
+    },
+    ResumeDiscarded {
+        reason: String,
+    },
     Progress(Snapshot),
     /// Which link fetched which chunk (drives the chunk grid).
-    ChunkDone { idx: usize, route: usize },
-    RouteDown { route: usize, reason: String },
+    ChunkDone {
+        idx: usize,
+        route: usize,
+    },
+    RouteDown {
+        route: usize,
+        reason: String,
+    },
     /// A link joined (or came back to) the running download.
-    RouteUp { route: usize, name: String },
-    Finished { path: String },
+    RouteUp {
+        route: usize,
+        name: String,
+    },
+    Finished {
+        path: String,
+    },
 }
 
 pub type Emit = Arc<dyn Fn(Event) + Send + Sync>;
@@ -286,8 +305,11 @@ pub async fn download(mut opts: Options, cancel: CancellationToken, emit: Emit) 
         let val = HeaderValue::from_str(v).map_err(|e| Error::Other(format!("bad header value for {k}: {e}")))?;
         headers.insert(name, val);
     }
-    let clients: Vec<Client> =
-        opts.routes.iter().map(|r| client_via_proxy(r.link.as_ref(), r.mode, opts.proxy.as_deref())).collect::<std::result::Result<_, _>>()?;
+    let clients: Vec<Client> = opts
+        .routes
+        .iter()
+        .map(|r| client_via_proxy(r.link.as_ref(), r.mode, opts.proxy.as_deref()))
+        .collect::<std::result::Result<_, _>>()?;
 
     // Probe on the first route that answers; a dead link must not block the download.
     let mut probed: Option<(usize, Probe)> = None;
@@ -317,9 +339,7 @@ pub async fn download(mut opts: Options, cancel: CancellationToken, emit: Emit) 
     });
 
     let final_path = match (probe.ranges, probe.total) {
-        (true, Some(total)) => {
-            ranged(&opts, &probe, clients, &filename, &staging, total, shared, cancel, emit.clone()).await?
-        }
+        (true, Some(total)) => ranged(&opts, &probe, clients, &filename, &staging, total, shared, cancel, emit.clone()).await?,
         _ => single(&opts, &probe, &clients[probe_route], &filename, &staging, shared, cancel, emit.clone()).await?,
     };
     emit(Event::Finished { path: final_path.display().to_string() });
@@ -351,8 +371,11 @@ async fn ranged(
         chunk_size,
     };
     match opts.store.as_ref().map(|s| s.load(&id)).transpose()?.flatten() {
-        Some((rec, d)) if rec.total == total && rec.etag == fresh.etag && rec.last_modified == fresh.last_modified
-            && std::fs::metadata(staging).map(|m| m.len() == total).unwrap_or(false) =>
+        Some((rec, d))
+            if rec.total == total
+                && rec.etag == fresh.etag
+                && rec.last_modified == fresh.last_modified
+                && std::fs::metadata(staging).map(|m| m.len() == total).unwrap_or(false) =>
         {
             chunk_size = rec.chunk_size;
             done = d;
@@ -492,8 +515,8 @@ async fn single(
 async fn supervise(ctx: &Arc<Ctx>, opts: &Options, mut clients: Vec<Client>) {
     let mut defs: Vec<Route> = opts.routes.clone();
     let mut set: JoinSet<()> = JoinSet::new();
-    for i in 0..defs.len() {
-        spawn_workers(ctx, &mut set, i, &clients[i]);
+    for (i, client) in clients.iter().enumerate() {
+        spawn_workers(ctx, &mut set, i, client);
     }
     let mut tick = tokio::time::interval(Duration::from_millis(250));
     let (mut last_watch, mut no_link_since) = (Instant::now(), None::<Instant>);
@@ -522,10 +545,7 @@ async fn supervise(ctx: &Arc<Ctx>, opts: &Options, mut clients: Vec<Client>) {
 
         // A link whose connections all gave up is tried again after a pause (the network may be back).
         for (i, rs) in ctx.shared.all().iter().enumerate() {
-            if !rs.is_down()
-                && rs.workers.load(Ordering::Relaxed) == 0
-                && rs.last_exit.lock().unwrap().elapsed() >= opts.revive_after
-            {
+            if !rs.is_down() && rs.workers.load(Ordering::Relaxed) == 0 && rs.last_exit.lock().unwrap().elapsed() >= opts.revive_after {
                 restart_route(ctx, opts, &mut defs[i], &mut clients[i], &mut set, i, None);
             }
         }
@@ -592,7 +612,15 @@ fn reconcile(ctx: &Arc<Ctx>, opts: &Options, defs: &mut Vec<Route>, clients: &mu
 
 /// Replace a link's state with a fresh one (keeping its byte count) and start new workers on a new client.
 /// `new_def` replaces the stored definition when the link changed (e.g. a new IP address).
-fn restart_route(ctx: &Arc<Ctx>, opts: &Options, def: &mut Route, client: &mut Client, set: &mut JoinSet<()>, i: usize, stored: Option<&mut Route>) {
+fn restart_route(
+    ctx: &Arc<Ctx>,
+    opts: &Options,
+    def: &mut Route,
+    client: &mut Client,
+    set: &mut JoinSet<()>,
+    i: usize,
+    stored: Option<&mut Route>,
+) {
     let Ok(new_client) = client_via_proxy(def.link.as_ref(), def.mode, opts.proxy.as_deref()) else { return };
     let old = ctx.shared.route(i);
     old.stop.cancel();
@@ -698,7 +726,17 @@ async fn sleep_or_stop(rs: &RouteState, d: Duration) {
     }
 }
 
-async fn fetch_chunk(ctx: &Ctx, client: &Client, route: usize, rs: &RouteState, url_idx: usize, idx: usize, start: u64, end: u64) -> std::result::Result<Outcome, FetchErr> {
+#[allow(clippy::too_many_arguments)]
+async fn fetch_chunk(
+    ctx: &Ctx,
+    client: &Client,
+    route: usize,
+    rs: &RouteState,
+    url_idx: usize,
+    idx: usize,
+    start: u64,
+    end: u64,
+) -> std::result::Result<Outcome, FetchErr> {
     let mirror = url_idx != 0;
     let mut req = client.get(&ctx.urls[url_idx]).headers(ctx.headers.clone()).header(RANGE, format!("bytes={start}-{end}"));
     // The validator belongs to the primary URL; a mirror may have different ETags for identical bytes.
@@ -809,7 +847,13 @@ fn spawn_ticker(shared: Arc<Shared>, emit: Emit) -> tokio::task::JoinHandle<()> 
                     route_ema[i] = 0.5 * route_ema[i] + 0.5 * (b.saturating_sub(last_routes[i]) as f64 / secs);
                     last_routes[i] = b;
                     r.speed.store(route_ema[i].to_bits(), Ordering::Relaxed);
-                    RouteStat { name: r.name.clone(), bytes: b, bytes_per_sec: route_ema[i], connections: r.active.load(Ordering::Relaxed), down: r.is_down() || r.workers.load(Ordering::Relaxed) == 0 }
+                    RouteStat {
+                        name: r.name.clone(),
+                        bytes: b,
+                        bytes_per_sec: route_ema[i],
+                        connections: r.active.load(Ordering::Relaxed),
+                        down: r.is_down() || r.workers.load(Ordering::Relaxed) == 0,
+                    }
                 })
                 .collect();
             // A raced duplicate counts until the losing copy aborts; never report more than the file size.
@@ -827,10 +871,7 @@ fn unique_path(dir: &Path, name: &str) -> PathBuf {
     let p = Path::new(name);
     let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| name.into());
     let ext = p.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
-    (1..)
-        .map(|n| dir.join(format!("{stem} ({n}){ext}")))
-        .find(|c| !c.exists())
-        .expect("unbounded range")
+    (1..).map(|n| dir.join(format!("{stem} ({n}){ext}"))).find(|c| !c.exists()).expect("unbounded range")
 }
 
 /// Check the finished staging file; on a mismatch drop it (and its resume record) so a retry starts clean.
@@ -852,7 +893,9 @@ fn slow_tail(ctx: &Ctx, me: &RouteState) -> bool {
         return false;
     }
     let speed = |r: &RouteState| f64::from_bits(r.speed.load(Ordering::Relaxed));
-    let Some((best, best_state)) = routes.iter().filter(|r| !r.is_down()).map(|r| (speed(r), r)).max_by(|a, b| a.0.total_cmp(&b.0)) else { return false };
+    let Some((best, best_state)) = routes.iter().filter(|r| !r.is_down()).map(|r| (speed(r), r)).max_by(|a, b| a.0.total_cmp(&b.0)) else {
+        return false;
+    };
     is_slow_tail(speed(me), best, ctx.sched.pending_len(), best_state.allowed.load(Ordering::Relaxed))
 }
 
