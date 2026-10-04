@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { mock } from "./mock";
-import type { AddOptions, AddResult, AfterAll, HlsVariant, ScheduleEffect, BatchResult, HistoryRec, PageLink, AppState, EngineEvent, Item, LinksResponse, Settings, SpikeReport } from "./types";
+import type { PendingAdd, AddOptions, AddResult, AfterAll, HlsVariant, ScheduleEffect, BatchResult, HistoryRec, PageLink, AppState, EngineEvent, Item, LinksResponse, Settings, SpikeReport } from "./types";
 
 const native = "__TAURI_INTERNALS__" in window;
 const call = <T,>(cmd: string, args?: Record<string, unknown>) => (native ? invoke<T>(cmd, args) : (mock.call(cmd, args) as Promise<T>));
@@ -16,6 +16,8 @@ export const api = {
   quit: () => call<void>("quit_app"),
   checkUpdate: () => call<string | null>("check_update"),
   installUpdate: () => call<void>("install_update"),
+  pendingAdds: () => call<PendingAdd[]>("pending_adds"),
+  discardPending: (id: string) => call<void>("discard_pending", { id }),
   takeOpenSettings: () => call<boolean>("take_open_settings"),
   showMain: (settings = false) => call<void>("show_main_window", { settings }),
   addBatch: (text: string, options?: AddOptions) => call<BatchResult>("add_batch", { text, options: options ?? null }),
@@ -73,6 +75,13 @@ type Handlers = {
 export function onOpenSettings(cb: () => void): () => void {
   if (!native) return () => {};
   const p = listen("open-settings", cb);
+  return () => void p.then((un) => un());
+}
+
+/** Called when the browser extension hands over a download for confirmation. */
+export function onPendingAdd(cb: () => void): () => void {
+  if (!native) return () => {};
+  const p = listen("pending-add", cb);
   return () => void p.then((un) => un());
 }
 

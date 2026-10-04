@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, onOpenSettings } from "./api";
+import { api, onOpenSettings, onPendingAdd } from "./api";
 import { AddDialog } from "./AddDialog";
 import { CommandPalette, type Command } from "./CommandPalette";
 import { DownloadRow, progressOf, type DragProps } from "./DownloadRow";
@@ -13,7 +13,7 @@ import { Onboarding } from "./Onboarding";
 import { SettingsPanel } from "./Settings";
 import { filterTitle, matchFilter, Sidebar, type Filter } from "./Sidebar";
 import { useDownloads } from "./store";
-import type { AfterAll, Item, Live, Settings } from "./types";
+import type { AfterAll, Item, Live, PendingAdd, Settings } from "./types";
 import { MOD } from "./platform";
 import { msg, t, tn } from "./i18n";
 
@@ -65,6 +65,7 @@ export function MainWindow() {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [pendingAdds, setPendingAdds] = useState<PendingAdd[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [palette, setPalette] = useState(false);
   const [dropping, setDropping] = useState(false);
@@ -74,6 +75,12 @@ export function MainWindow() {
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
 
+  // Downloads the browser extension wants confirmed: one sheet at a time, also those that arrived before this window existed.
+  useEffect(() => {
+    const load = () => void api.pendingAdds().then(setPendingAdds).catch(() => {});
+    load();
+    return onPendingAdd(load);
+  }, []);
   useEffect(() => onOpenSettings(() => setSettingsOpen(true)), []);
   // Preferences were requested (from the menu bar) while this window was still being created.
   useEffect(() => void api.takeOpenSettings().then((v) => v && setSettingsOpen(true)).catch(() => {}), []);
@@ -262,7 +269,20 @@ export function MainWindow() {
 
       {dropping && <div className="drop-overlay" aria-hidden="true"><div><Icon name="download" size={28} /><p>{t("Drop links to download")}</p></div></div>}
       {toast && <div className="toast" role="status">{toast}</div>}
-      {adding && <AddDialog defaultDir={d.app?.settings.dest_dir} onClose={() => setAdding(false)} />}
+      {pendingAdds[0] ? (
+        <AddDialog
+          key={pendingAdds[0].id}
+          defaultDir={d.app?.settings.dest_dir}
+          pending={pendingAdds[0]}
+          onClose={() => {
+            const id = pendingAdds[0].id;
+            // Added or cancelled: either way the saved copy is no longer needed.
+            void api.discardPending(id).then(() => api.pendingAdds().then(setPendingAdds));
+          }}
+        />
+      ) : (
+        adding && <AddDialog defaultDir={d.app?.settings.dest_dir} onClose={() => setAdding(false)} />
+      )}
       {relink && <LinkDialog item={relink} onClose={() => setRelink(null)} />}
       {palette && <CommandPalette commands={commands} onClose={() => setPalette(false)} />}
       {settingsOpen && d.app && (

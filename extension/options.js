@@ -29,6 +29,7 @@ $('grant').addEventListener('click', async () => {
 async function load() {
   const s = await getSettings();
   $('enabled').checked = s.enabled;
+  $('askFirst').checked = s.askFirst;
   $('token').value = s.token;
   $('skipDomains').value = s.skipDomains.join('\n');
   $('skipExtensions').value = s.skipExtensions.join('\n');
@@ -59,6 +60,7 @@ $('save').addEventListener('click', async () => {
     skipDomains: lines($('skipDomains').value),
     skipExtensions: lines($('skipExtensions').value),
     minSizeMB: Math.max(0, Number($('minSizeMB').value) || 0),
+    askFirst: $('askFirst').checked,
   });
   say('Saved.');
 });

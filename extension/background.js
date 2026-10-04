@@ -45,7 +45,7 @@ export async function handleDownload(item) {
   const settings = await getSettings();
   if (!shouldCapture(item, settings)) return;
 
-  const r = await addDownload(await buildRequest(item), settings.token);
+  const r = await addDownload({ ...(await buildRequest(item)), ask: settings.askFirst }, settings.token);
   if (r.ok) {
     await refreshBadge(false);
     // Only after the app accepted it do we drop the browser's copy.
@@ -62,7 +62,7 @@ async function handleMenu(info) {
   const url = info.linkUrl || info.srcUrl;
   if (!isCapturableUrl(url)) return;
   const settings = await getSettings();
-  const req = { url, userAgent: navigator.userAgent };
+  const req = { url, userAgent: navigator.userAgent, ask: settings.askFirst };
   if (info.pageUrl) req.referrer = info.pageUrl;
   const cookies = await cookieHeaderFor(url);
   if (cookies) req.cookies = cookies;
@@ -81,6 +81,14 @@ function createMenu() {
   });
 }
 
+// Chromium asks this before it shows a "Save as" panel, so taking the download here keeps that panel from opening.
+// The listener must answer (suggest) once its work is done, or the browser would wait for it.
+if (chrome.downloads && chrome.downloads.onDeterminingFilename) {
+  chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
+    handleDownload(item).then(() => suggest(), () => suggest());
+    return true;
+  });
+}
 // Safari has no downloads API: there the extension works from the context menu and popup only.
 if (chrome.downloads && chrome.downloads.onCreated) chrome.downloads.onCreated.addListener((item) => { handleDownload(item); });
 chrome.contextMenus.onClicked.addListener((info) => { handleMenu(info); });

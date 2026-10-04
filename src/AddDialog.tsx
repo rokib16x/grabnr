@@ -7,9 +7,10 @@ import { t } from "./i18n";
 const folderName = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
 const isUrl = (s: string) => /^((https?|s?ftp):\/\/|magnet:\?)\S+$/i.test(s);
 
-export function AddDialog({ defaultDir, onClose }: { defaultDir?: string; onClose: () => void }) {
-  const [text, setText] = useState("");
-  const [name, setName] = useState("");
+/** `pending` is a download the browser extension handed over for confirmation. */
+export function AddDialog({ defaultDir, pending, onClose }: { defaultDir?: string; pending?: { id: string; url: string; filename?: string | null }; onClose: () => void }) {
+  const [text, setText] = useState(pending?.url ?? "");
+  const [name, setName] = useState(pending?.filename ?? "");
   const [sum, setSum] = useState("");
   const [more, setMore] = useState(false);
   const [auth, setAuth] = useState<"none" | "basic" | "token">("none");
@@ -29,11 +30,11 @@ export function AddDialog({ defaultDir, onClose }: { defaultDir?: string; onClos
   useEffect(() => {
     input.current?.focus();
     // Pre-fill from the clipboard when it holds a link.
-    navigator.clipboard?.readText().then((t) => isUrl(t.trim().split(/\s+/)[0] ?? "") && setText((u) => u || t.trim())).catch(() => {});
+    if (!pending) navigator.clipboard?.readText().then((t) => isUrl(t.trim().split(/\s+/)[0] ?? "") && setText((u) => u || t.trim())).catch(() => {});
     const esc = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", esc);
     return () => window.removeEventListener("keydown", esc);
-  }, [onClose]);
+  }, [onClose, pending]);
 
   const urls = useMemo(() => [...new Set(text.split(/\s+/).filter(isUrl))], [text]);
   const many = urls.length > 1;
@@ -49,6 +50,7 @@ export function AddDialog({ defaultDir, onClose }: { defaultDir?: string; onClos
     proxy: proxy || undefined,
     mirrors: !many && mirrors.trim() ? mirrors.split(/\s+/).filter(Boolean) : undefined,
     quality: quality !== "best" ? quality : undefined,
+    pending: pending?.id,
   });
 
   async function report(r: { added: number; duplicates: number; skipped: number }) {

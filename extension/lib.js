@@ -11,6 +11,8 @@ export const DEFAULTS = {
   skipExtensions: ['torrent'],
   skipDomains: [],
   minSizeMB: 0,
+  // Show grabnr's Add Download sheet (folder, name, checksum, sign-in) before a captured download starts.
+  askFirst: true,
 };
 
 export async function getSettings() {

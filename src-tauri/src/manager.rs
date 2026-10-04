@@ -265,6 +265,8 @@ pub struct Manager {
     webhook_error: Mutex<Option<String>>,
     /// The popover asked for Preferences; the main window takes it when it opens.
     open_settings: std::sync::atomic::AtomicBool,
+    /// Downloads the browser extension asked grabnr to confirm first (shown in the Add Download sheet).
+    pending: Mutex<Vec<(String, AddRequest)>>,
     secrets: Arc<crate::secrets::Cached>,
     keychain_error: Mutex<Option<String>>,
     limiter: Arc<Limiter>,
@@ -361,6 +363,7 @@ impl Manager {
             history: Mutex::new(history),
             webhook_error: Mutex::new(None),
             open_settings: std::sync::atomic::AtomicBool::new(false),
+            pending: Mutex::new(Vec::new()),
             secrets,
             keychain_error: Mutex::new(None),
             limiter: Arc::new(Limiter::new(0)),
@@ -921,6 +924,29 @@ impl Manager {
             let res = grabnr_core::fetch::post_json(&url, body, proxy.as_deref(), Duration::from_secs(10)).await;
             *me.webhook_error.lock().unwrap() = res.err().map(|e| e.to_string());
         });
+    }
+
+    pub fn app_handle(&self) -> AppHandle {
+        self.app.clone()
+    }
+
+    /// Keeps a download until the user confirms it in the Add Download sheet.
+    pub fn stash_pending(&self, req: AddRequest) -> String {
+        let id = format!("p{:x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+        self.pending.lock().unwrap().push((id.clone(), req));
+        let _ = self.app.emit("pending-add", &id);
+        id
+    }
+
+    /// What the sheet needs to show: id, link and suggested name. Headers stay here.
+    pub fn pending_views(&self) -> Vec<(String, String, Option<String>)> {
+        self.pending.lock().unwrap().iter().map(|(id, r)| (id.clone(), r.url.clone(), r.filename.clone())).collect()
+    }
+
+    pub fn claim_pending(&self, id: &str) -> Option<AddRequest> {
+        let mut p = self.pending.lock().unwrap();
+        let i = p.iter().position(|(x, _)| x == id)?;
+        Some(p.remove(i).1)
     }
 
     pub fn request_settings(&self) {

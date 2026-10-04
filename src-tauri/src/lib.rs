@@ -45,6 +45,8 @@ struct AddOptions {
     proxy: Option<String>,
     mirrors: Option<Vec<String>>,
     quality: Option<String>,
+    /// A download the browser extension is waiting on: its saved headers are used and the entry is removed.
+    pending: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -148,7 +150,17 @@ async fn expand_metalink(mut req: AddRequest) -> Result<AddRequest, String> {
 
 #[tauri::command]
 async fn add_download(m: Mgr<'_>, url: String, options: Option<AddOptions>) -> Result<AddResult, String> {
-    let req = expand_metalink(build_request(url, &options.unwrap_or_default())?).await?;
+    let o = options.unwrap_or_default();
+    let mut req = build_request(url, &o)?;
+    if let Some(p) = o.pending.as_deref().and_then(|id| m.inner().claim_pending(id)) {
+        // Cookies, referrer and the like come from the browser; anything typed in the sheet wins.
+        let typed = std::mem::take(&mut req.headers);
+        let mut merged: Vec<(String, String)> =
+            p.headers.into_iter().filter(|(k, _)| !typed.iter().any(|(t, _)| t.eq_ignore_ascii_case(k))).collect();
+        merged.extend(typed);
+        req.headers = merged;
+    }
+    let req = expand_metalink(req).await?;
     let (id, duplicate) = m.inner().add(req);
     Ok(AddResult { id, duplicate })
 }
@@ -399,6 +411,24 @@ fn show_main_window(app: tauri::AppHandle, m: Mgr, settings: bool) {
 }
 
 /// True once, if the menu bar popover asked for Preferences while the main window was being created.
+#[derive(Serialize)]
+struct PendingView {
+    id: String,
+    url: String,
+    filename: Option<String>,
+}
+
+/// Downloads from the browser extension that are waiting for a confirmation.
+#[tauri::command]
+fn pending_adds(m: Mgr) -> Vec<PendingView> {
+    m.pending_views().into_iter().map(|(id, url, filename)| PendingView { id, url, filename }).collect()
+}
+
+#[tauri::command]
+fn discard_pending(m: Mgr, id: String) {
+    m.claim_pending(&id);
+}
+
 #[tauri::command]
 fn take_open_settings(m: Mgr) -> bool {
     m.take_settings_request()
@@ -658,6 +688,8 @@ pub fn run() {
             quit_app,
             show_main_window,
             take_open_settings,
+            pending_adds,
+            discard_pending,
             check_update,
             install_update,
             get_autostart,

@@ -30,6 +30,7 @@ const ev = (name) => ({ addListener: (f) => (listeners[name] = f) });
 globalThis.chrome = {
   downloads: {
     onCreated: ev('created'),
+    onDeterminingFilename: ev('determining'),
     cancel: async (id) => calls.cancel.push(id),
     erase: async (q) => calls.erase.push(q.id),
   },
@@ -67,9 +68,19 @@ let item = await run({ finalUrl: 'https://cdn.example.com/a.zip' });
 assert.equal(server.adds[0].auth, `Bearer ${TOKEN}`);
 assert.deepEqual(server.adds[0].body, {
   url: 'https://cdn.example.com/a.zip', userAgent: 'TestUA/1.0', referrer: 'https://example.com/',
-  filename: 'a.zip', cookies: 'a=b; c=d',
+  filename: 'a.zip', cookies: 'a=b; c=d', ask: true,
 });
 assert.deepEqual(calls.cancel, [item.id]); assert.deepEqual(calls.erase, [item.id]);
+// the browser's own copy is dropped before its Save As panel, and the browser is always answered
+{
+  reset(); let answered = 0;
+  const r = listeners.determining({ id: nextId++, url: 'https://example.com/b.zip', filename: 'b.zip', fileSize: -1 }, () => answered++);
+  assert.equal(r, true, 'answers asynchronously');
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(answered, 1, 'suggest called once'); assert.equal(server.adds.length, 1); assert.equal(calls.cancel.length, 1);
+}
+// with "ask first" off, the download starts straight away
+await run({}, { askFirst: false }); assert.equal(server.adds[0].body.ask, false);
 // same id twice is a no-op
 const before = server.adds.length; await handleDownload(item); assert.equal(server.adds.length, before);
 

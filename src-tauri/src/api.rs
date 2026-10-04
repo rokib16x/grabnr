@@ -29,6 +29,8 @@ struct AddBody {
     #[serde(rename = "userAgent")]
     user_agent: Option<String>,
     headers: Option<HashMap<String, String>>,
+    /// Show the Add Download sheet first instead of starting right away.
+    ask: Option<bool>,
 }
 
 pub fn spawn(m: Arc<Manager>) {
@@ -120,7 +122,8 @@ fn handle(m: &Arc<Manager>, mut req: Request) {
                     headers.push((name.into(), v));
                 }
             }
-            let (id, duplicate) = m.add(AddRequest {
+            let ask = b.ask.unwrap_or(false);
+            let areq = AddRequest {
                 url: b.url,
                 filename: b.filename,
                 headers,
@@ -129,7 +132,13 @@ fn handle(m: &Arc<Manager>, mut req: Request) {
                 proxy: None,
                 mirrors: Vec::new(),
                 quality: None,
-            });
+            };
+            if ask {
+                let id = m.stash_pending(areq);
+                crate::show_main(&m.app_handle());
+                return reply(req, 200, json!({"id": id, "duplicate": false, "pending": true}), cors);
+            }
+            let (id, duplicate) = m.add(areq);
             reply(req, 200, json!({"id": id, "duplicate": duplicate}), cors)
         }
         _ => reply(req, 404, json!({"error": "not found"}), cors),

@@ -18,7 +18,7 @@ export type Item = {
 
 export type LinkRule = { share_pct: number; limit_kbps: number };
 
-export type AddOptions = { filename?: string; dir?: string; checksum?: string; username?: string; password?: string; token?: string; proxy?: string; mirrors?: string[]; quality?: string };
+export type AddOptions = { filename?: string; dir?: string; checksum?: string; username?: string; password?: string; token?: string; proxy?: string; mirrors?: string[]; quality?: string; pending?: string };
 
 export type HlsVariant = { url: string; bandwidth: number; width: number | null; height: number | null; label: string };
 export type BatchResult = { added: number; duplicates: number; skipped: number };
@@ -109,3 +109,5 @@ export type HistoryRec = {
   link_bytes: Record<string, number>;
   saved_secs: number;
 };
+
+export type PendingAdd = { id: string; url: string; filename?: string | null };

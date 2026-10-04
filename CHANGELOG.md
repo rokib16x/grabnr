@@ -4,6 +4,13 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.1.2] - unreleased
+
+### Fixed
+- **Browser extension:** a download is now taken before the browser opens its own "Save as" panel, so the panel no longer appears next to grabnr's copy.
+- **Browser extension:** downloads handed over from the browser open grabnr's Add Download sheet first (folder, name, checksum, sign-in), as when you add a link yourself. Turn this off in the extension options ("Ask in grabnr before starting").
+- **Window:** long file names no longer push the list wider than the window.
+
 ## [0.1.1] - 2026-10-04
 
 First signed release: the macOS apps are signed with a Developer ID certificate and notarized by Apple, and installed apps can check for and install updates. Everything below was added since 0.1.0.
