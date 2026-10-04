@@ -93,7 +93,7 @@ Anything marked built has not yet been proven on two real links with different g
 ## 9. Quality
 - [x] Unit tests, local range-server integration tests (mirrors, auth, proxy, hot-plug, stalls)
 - [x] CI: format, clippy, tests on macOS/Linux, UI type-check and tests
-- [ ] UI end-to-end tests
+- [x] UI end-to-end tests (Playwright, against the mock backend; the native shell is not covered)
 - [ ] Installer under about 15 MB and under 100 MB RAM idle: not measured yet
 
 ## 10. Platforms

@@ -14,7 +14,7 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 - **Security:** optional Keychain storage for credentials.
 - **Schedule:** rules that hold downloads, cap the speed or lift the cap by day and hour; an action to run when all downloads finish (sleep, quit or a command).
 - **App:** macOS-style window with sidebar, categories, sorting, inspector, History with statistics and CSV export, drag and drop, first-run onboarding, command palette, menu bar popover, Dock progress, notification sound.
-- **Project:** CI, release workflow, brand assets, contributing and security docs.
+- **Project:** UI end-to-end tests, CI, release workflow, brand assets, contributing and security docs.
 
 ### Changed
 - Partial downloads from earlier builds restart once: resume state is now keyed per download and carries piece checksums.

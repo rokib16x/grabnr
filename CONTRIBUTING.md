@@ -20,7 +20,9 @@ The UI also runs in a plain browser with a mock backend (`npm run dev`, then ope
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-npm run check               # type-check, UI tests, extension harness
+npm run check               # type-check, UI unit tests, extension harness
+npx playwright install chromium   # once
+npm run e2e                 # browser tests of the UI against the mock backend
 ```
 
 CI runs the same checks.

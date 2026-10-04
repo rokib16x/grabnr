@@ -8,6 +8,9 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(() => ({
   plugins: [react()],
 
+  // Unit tests live in src/; the browser tests in e2e/ are run by Playwright.
+  test: { include: ["src/**/*.test.ts"] },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors
