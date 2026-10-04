@@ -15,6 +15,8 @@ struct Server {
     bytes_served: Arc<AtomicU64>,
     /// When set, requests must carry exactly this Authorization header (compared lowercased).
     need_auth: Arc<std::sync::Mutex<Option<String>>>,
+    /// The next N range requests send headers and then go silent, like a dead connection after sleep.
+    stall_next: Arc<AtomicUsize>,
 }
 
 fn byte(i: u64, version: u64) -> u8 {
@@ -32,11 +34,12 @@ async fn serve(ranges: bool) -> Server {
     let fail_first = Arc::new(AtomicUsize::new(0));
     let bytes_served = Arc::new(AtomicU64::new(0));
     let need_auth: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
-    let (v, f, b, na) = (version.clone(), fail_first.clone(), bytes_served.clone(), need_auth.clone());
+    let stall_next = Arc::new(AtomicUsize::new(0));
+    let (v, f, b, na, sn) = (version.clone(), fail_first.clone(), bytes_served.clone(), need_auth.clone(), stall_next.clone());
     tokio::spawn(async move {
         loop {
             let Ok((mut sock, _)) = listener.accept().await else { return };
-            let (v, f, b, na) = (v.clone(), f.clone(), b.clone(), na.clone());
+            let (v, f, b, na, sn) = (v.clone(), f.clone(), b.clone(), na.clone(), sn.clone());
             tokio::spawn(async move {
                 let mut buf = Vec::new();
                 let mut tmp = [0u8; 2048];
@@ -80,6 +83,11 @@ async fn serve(ranges: bool) -> Server {
                     if ranges { "accept-ranges: bytes\r\n" } else { "" }
                 );
                 let _ = sock.write_all(head.as_bytes()).await;
+                if header("range").map(|r| r != "bytes=0-0").unwrap_or(false) && sn.load(Ordering::Relaxed) > 0 {
+                    sn.fetch_sub(1, Ordering::Relaxed);
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    return;
+                }
                 // small writes so a cancel can land mid-chunk
                 for part in body.chunks(64 * 1024) {
                     if sock.write_all(part).await.is_err() {
@@ -90,7 +98,7 @@ async fn serve(ranges: bool) -> Server {
             });
         }
     });
-    Server { port, version, fail_first, bytes_served, need_auth }
+    Server { port, version, fail_first, bytes_served, need_auth, stall_next }
 }
 
 fn silent() -> Arc<dyn Fn(Event) + Send + Sync> {
@@ -321,4 +329,88 @@ async fn a_link_can_be_limited_to_fewer_connections() {
     let path = download(o, CancellationToken::new(), emit).await.unwrap();
     assert_eq!(std::fs::read(path).unwrap(), expected(0));
     assert!(peak.load(Ordering::Relaxed) <= 1, "link a was capped at one connection");
+}
+
+fn watch(f: impl Fn(std::time::Duration) -> Vec<Route> + Send + Sync + 'static) -> grabnr_core::download::LinkWatch {
+    let t0 = std::time::Instant::now();
+    Arc::new(move || f(t0.elapsed()))
+}
+
+fn slow_options(url: String, name: &str, routes: Vec<Route>) -> Options {
+    let mut o = Options::new(url, tmp(name), routes);
+    o.conns_per_route = 1; // keep chunks queued so a joining link has something to take
+    o.speed_limit = Some(2 * 1024 * 1024); // ~2.5 s for the file
+    o.watch_interval = std::time::Duration::from_millis(100);
+    o
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_link_that_appears_joins_the_running_download() {
+    let s = serve(true).await;
+    let mut o = slow_options(format!("http://127.0.0.1:{}/j.bin", s.port), "join", vec![Route::unbound("a")]);
+    o.link_watch = Some(watch(|t| if t < std::time::Duration::from_millis(500) { vec![Route::unbound("a")] } else { two_routes() }));
+    let seen = Arc::new(std::sync::Mutex::new((vec![0usize; 2], Vec::<String>::new())));
+    let sn = seen.clone();
+    let emit: Arc<dyn Fn(Event) + Send + Sync> = Arc::new(move |e| match e {
+        Event::ChunkDone { route, .. } => sn.lock().unwrap().0[route] += 1,
+        Event::RouteUp { name, .. } => sn.lock().unwrap().1.push(name),
+        _ => {}
+    });
+    let path = download(o, CancellationToken::new(), emit).await.unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), expected(0));
+    let (chunks, ups) = seen.lock().unwrap().clone();
+    assert_eq!(ups, vec!["b".to_string()]);
+    assert!(chunks[1] >= 1, "the new link should have fetched chunks: {chunks:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_link_that_vanishes_hands_its_chunks_to_the_others() {
+    let s = serve(true).await;
+    let mut o = slow_options(format!("http://127.0.0.1:{}/v.bin", s.port), "vanish", two_routes());
+    o.link_watch = Some(watch(|t| if t < std::time::Duration::from_millis(400) { two_routes() } else { vec![Route::unbound("a")] }));
+    let downs = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let d = downs.clone();
+    let emit: Arc<dyn Fn(Event) + Send + Sync> = Arc::new(move |e| {
+        if let Event::RouteDown { route, .. } = e {
+            d.lock().unwrap().push(route);
+        }
+    });
+    let path = download(o, CancellationToken::new(), emit).await.unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), expected(0), "no bytes may be lost when a link drops mid-chunk");
+    assert_eq!(*downs.lock().unwrap(), vec![1]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn survives_every_link_disappearing_for_a_while() {
+    let s = serve(true).await;
+    let mut o = slow_options(format!("http://127.0.0.1:{}/g.bin", s.port), "gap", vec![Route::unbound("a")]);
+    o.link_watch = Some(watch(|t| {
+        let ms = t.as_millis();
+        if (300..1000).contains(&ms) { vec![] } else { vec![Route::unbound("a")] }
+    }));
+    let path = download(o, CancellationToken::new(), silent()).await.unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), expected(0));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn gives_up_when_no_link_returns_within_the_grace_period() {
+    let s = serve(true).await;
+    let mut o = slow_options(format!("http://127.0.0.1:{}/x2.bin", s.port), "nolink", vec![Route::unbound("a")]);
+    o.link_watch = Some(watch(|t| if t < std::time::Duration::from_millis(300) { vec![Route::unbound("a")] } else { vec![] }));
+    o.no_link_grace = std::time::Duration::from_millis(800);
+    let err = download(o, CancellationToken::new(), silent()).await.unwrap_err();
+    assert!(matches!(err, Error::AllFailed(_)), "{err}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn recovers_from_connections_that_go_silent() {
+    let s = serve(true).await;
+    s.stall_next.store(2, Ordering::Relaxed);
+    let mut o = Options::new(format!("http://127.0.0.1:{}/s.bin", s.port), tmp("stall"), two_routes());
+    o.conns_per_route = 2;
+    o.stall_timeout = std::time::Duration::from_millis(600);
+    let t = std::time::Instant::now();
+    let path = download(o, CancellationToken::new(), silent()).await.unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), expected(0));
+    assert!(t.elapsed() < std::time::Duration::from_secs(20), "took {:?}", t.elapsed());
 }

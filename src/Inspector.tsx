@@ -46,7 +46,7 @@ export function Inspector({ item, live, links }: { item?: Item; live?: Live; lin
 
       {active && routes.length > 0 && (
         <div className="link-chips">
-          {routes.map((r) => (
+          {routes.filter((r) => !r.down).map((r) => (
             <span key={r.name} className="link-chip" title={`${r.name} · ${r.connections} connections`}>
               <i style={{ background: linkColor(r.name) }}><Icon name={linkIcon(kindOf(r.name))} size={12} /></i>
               {rate(r.bytes_per_sec)}

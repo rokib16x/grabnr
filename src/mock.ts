@@ -27,7 +27,7 @@ function run(it: Item) {
     const rs = speeds.map((s, i) => {
       const bps = s * jitter();
       wire[i] += bps * 0.25;
-      return { name: ["en0", "en5", "en7"][i], bytes: wire[i], bytes_per_sec: bps, connections: 8 };
+      return { name: ["en0", "en5", "en7"][i], bytes: wire[i], bytes_per_sec: bps, connections: 8, down: false };
     });
     const total = rs.reduce((a, r) => a + r.bytes_per_sec, 0);
     it.downloaded = Math.min(it.total ?? 0, it.downloaded + total * 0.25);

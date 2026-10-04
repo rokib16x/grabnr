@@ -2,13 +2,14 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, IF_RANGE, RANGE};
 use reqwest::{Client, StatusCode};
 use serde::Serialize;
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::adapt::{is_slow_tail, Ramp};
@@ -41,11 +42,22 @@ impl Route {
         Route { name: link.name.clone(), link: Some(link.clone()), mode: BindMode::BoundIf, speed_limit: None, max_conns: None }
     }
 
+    /// Same link, same address: used to notice a link that came back with a different IP.
+    pub fn key(&self) -> String {
+        match &self.link {
+            Some(l) => format!("{}@{}", l.name, l.ipv4),
+            None => self.name.clone(),
+        }
+    }
+
     /// Let the OS routing table decide (used for single-link downloads and tests).
     pub fn unbound(name: &str) -> Self {
         Route { name: name.into(), link: None, mode: BindMode::None, speed_limit: None, max_conns: None }
     }
 }
+
+/// Reports the links that should be in use right now. Called every `watch_interval` during a download.
+pub type LinkWatch = Arc<dyn Fn() -> Vec<Route> + Send + Sync>;
 
 pub struct Options {
     pub url: String,
@@ -70,6 +82,15 @@ pub struct Options {
     pub proxy: Option<String>,
     /// Sent as the `Authorization` header (overrides one in `headers`).
     pub auth: Option<Auth>,
+    /// When set, links that appear join the running download and links that vanish drain out.
+    pub link_watch: Option<LinkWatch>,
+    pub watch_interval: Duration,
+    /// A connection that receives nothing for this long is dropped and the chunk retried (sleep/wake, dead Wi-Fi).
+    pub stall_timeout: Duration,
+    /// A link whose connections all gave up is tried again after this long.
+    pub revive_after: Duration,
+    /// With no working link at all, wait this long for one to come back before failing.
+    pub no_link_grace: Duration,
 }
 
 impl Options {
@@ -89,6 +110,11 @@ impl Options {
             ramp_interval: Duration::from_secs(2),
             proxy: None,
             auth: None,
+            link_watch: None,
+            watch_interval: Duration::from_secs(3),
+            stall_timeout: Duration::from_secs(30),
+            revive_after: Duration::from_secs(10),
+            no_link_grace: Duration::from_secs(30),
         }
     }
 }
@@ -100,6 +126,8 @@ pub struct RouteStat {
     pub bytes: u64,
     pub bytes_per_sec: f64,
     pub connections: usize,
+    /// The link is gone (unplugged, or its connections keep failing) and may come back.
+    pub down: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -119,6 +147,8 @@ pub enum Event {
     /// Which link fetched which chunk (drives the chunk grid).
     ChunkDone { idx: usize, route: usize },
     RouteDown { route: usize, reason: String },
+    /// A link joined (or came back to) the running download.
+    RouteUp { route: usize, name: String },
     Finished { path: String },
 }
 
@@ -128,6 +158,8 @@ const LINK_FAIL_LIMIT: u32 = 5;
 
 struct RouteState {
     name: String,
+    /// Most connections this link may open.
+    max: usize,
     bytes: AtomicU64,
     allowed: AtomicUsize,
     /// Most connections this link may use; lowered when the server throttles.
@@ -137,13 +169,64 @@ struct RouteState {
     active: AtomicUsize,
     last_throttle: Mutex<Instant>,
     limit: Option<Limiter>,
+    /// Running worker tasks for this link.
+    workers: AtomicUsize,
+    last_exit: Mutex<Instant>,
+    /// Cancelled to make this link's workers drain; replaced when the link is restarted.
+    stop: CancellationToken,
+    down: std::sync::atomic::AtomicBool,
+}
+
+impl RouteState {
+    fn new(r: &Route, opts: &Options, bytes: u64, stop: CancellationToken) -> Self {
+        let max = max_conns(opts, r);
+        RouteState {
+            name: r.name.clone(),
+            max,
+            bytes: AtomicU64::new(bytes),
+            allowed: AtomicUsize::new(Ramp::new(max, opts.adaptive).allowed),
+            ceiling: AtomicUsize::new(max),
+            speed: AtomicU64::new(0),
+            active: AtomicUsize::new(0),
+            last_throttle: Mutex::new(Instant::now() - Duration::from_secs(60)),
+            limit: r.speed_limit.map(Limiter::new),
+            workers: AtomicUsize::new(0),
+            last_exit: Mutex::new(Instant::now()),
+            stop,
+            down: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    fn is_down(&self) -> bool {
+        self.down.load(Ordering::Relaxed)
+    }
+}
+
+/// Counts a worker as running until dropped, so the supervisor knows when a link has no workers left.
+struct WorkerGuard(Arc<RouteState>);
+impl Drop for WorkerGuard {
+    fn drop(&mut self) {
+        *self.0.last_exit.lock().unwrap() = Instant::now();
+        self.0.workers.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 struct Shared {
     total: Option<u64>,
     global: AtomicU64,
-    routes: Vec<RouteState>,
+    /// Append-only: a link keeps its index for the whole download, so chunk and stat indices stay valid.
+    routes: RwLock<Vec<Arc<RouteState>>>,
     limit: Option<Limiter>,
+}
+
+impl Shared {
+    fn route(&self, i: usize) -> Arc<RouteState> {
+        self.routes.read().unwrap()[i].clone()
+    }
+
+    fn all(&self) -> Vec<Arc<RouteState>> {
+        self.routes.read().unwrap().clone()
+    }
 }
 
 struct Ctx {
@@ -160,6 +243,7 @@ struct Ctx {
     last_err: Mutex<String>,
     emit: Emit,
     max_attempts: u32,
+    stall_timeout: Duration,
 }
 
 impl Ctx {
@@ -224,26 +308,13 @@ pub async fn download(mut opts: Options, cancel: CancellationToken, emit: Emit) 
     let shared = Arc::new(Shared {
         total: probe.total,
         global: AtomicU64::new(0),
-        routes: opts
-            .routes
-            .iter()
-            .map(|r| RouteState {
-                name: r.name.clone(),
-                bytes: AtomicU64::new(0),
-                allowed: AtomicUsize::new(Ramp::new(max_conns(&opts, r), opts.adaptive).allowed),
-                ceiling: AtomicUsize::new(max_conns(&opts, r)),
-                speed: AtomicU64::new(0),
-                active: AtomicUsize::new(0),
-                last_throttle: Mutex::new(Instant::now() - Duration::from_secs(60)),
-                limit: r.speed_limit.map(Limiter::new),
-            })
-            .collect(),
+        routes: RwLock::new(opts.routes.iter().map(|r| Arc::new(RouteState::new(r, &opts, 0, cancel.child_token()))).collect()),
         limit: opts.speed_limit.map(Limiter::new),
     });
 
     let final_path = match (probe.ranges, probe.total) {
         (true, Some(total)) => {
-            ranged(&opts, &probe, &clients, &filename, &staging, total, shared, cancel, emit.clone()).await?
+            ranged(&opts, &probe, clients, &filename, &staging, total, shared, cancel, emit.clone()).await?
         }
         _ => single(&opts, &probe, &clients[probe_route], &filename, &staging, shared, cancel, emit.clone()).await?,
     };
@@ -255,7 +326,7 @@ pub async fn download(mut opts: Options, cancel: CancellationToken, emit: Emit) 
 async fn ranged(
     opts: &Options,
     probe: &Probe,
-    clients: &[Client],
+    clients: Vec<Client>,
     filename: &str,
     staging: &Path,
     total: u64,
@@ -320,19 +391,12 @@ async fn ranged(
         last_err: Mutex::new(String::new()),
         emit: emit.clone(),
         max_attempts: opts.max_attempts,
+        stall_timeout: opts.stall_timeout,
     });
 
     let ticker = spawn_ticker(shared.clone(), emit.clone());
-    let ramp = opts.adaptive.then(|| spawn_ramp(shared.clone(), opts.routes.iter().map(|r| max_conns(opts, r)).collect(), opts.ramp_interval));
-    let mut workers = Vec::new();
-    for (r, client) in clients.iter().enumerate() {
-        for w in 0..max_conns(opts, &opts.routes[r]) {
-            workers.push(tokio::spawn(worker(ctx.clone(), r, w, client.clone())));
-        }
-    }
-    for w in workers {
-        let _ = w.await;
-    }
+    let ramp = opts.adaptive.then(|| spawn_ramp(shared.clone(), opts.ramp_interval));
+    supervise(&ctx, opts, clients).await;
     ticker.abort();
     if let Some(r) = ramp {
         r.abort();
@@ -394,11 +458,13 @@ async fn single(
                 next = stream.next() => match next {
                     Some(Ok(b)) => {
                         if let Some(l) = &shared.limit { l.acquire(b.len() as u64).await; }
-                        if let Some(l) = &shared.routes[0].limit { l.acquire(b.len() as u64).await; }
+                        if let Some(l) = &shared.route(0).limit {
+                            l.acquire(b.len() as u64).await;
+                        }
                         file.write_all_at(&b, pos)?;
                         pos += b.len() as u64;
                         shared.global.fetch_add(b.len() as u64, Ordering::Relaxed);
-                        shared.routes[0].bytes.fetch_add(b.len() as u64, Ordering::Relaxed);
+                        shared.route(0).bytes.fetch_add(b.len() as u64, Ordering::Relaxed);
                     }
                     Some(Err(e)) => return Err(e.into()),
                     None => return Ok(()),
@@ -416,28 +482,146 @@ async fn single(
     Ok(dest)
 }
 
-async fn worker(ctx: Arc<Ctx>, route: usize, wid: usize, client: Client) {
-    let rs = &ctx.shared.routes[route];
+/// Runs the download: starts workers per link, watches for links coming and going, restarts links whose
+/// connections all gave up, and returns when every chunk is done, the download is cancelled or it cannot continue.
+async fn supervise(ctx: &Arc<Ctx>, opts: &Options, mut clients: Vec<Client>) {
+    let mut defs: Vec<Route> = opts.routes.clone();
+    let mut set: JoinSet<()> = JoinSet::new();
+    for i in 0..defs.len() {
+        spawn_workers(ctx, &mut set, i, &clients[i]);
+    }
+    let mut tick = tokio::time::interval(Duration::from_millis(250));
+    let (mut last_watch, mut no_link_since) = (Instant::now(), None::<Instant>);
+    loop {
+        if ctx.sched.finished() || ctx.abort.is_cancelled() {
+            break;
+        }
+        tokio::select! {
+            _ = ctx.abort.cancelled() => break,
+            Some(_) = set.join_next() => {}
+            _ = tick.tick() => {}
+        }
+        if ctx.sched.finished() || ctx.abort.is_cancelled() {
+            break;
+        }
+
+        if let Some(watch) = &opts.link_watch {
+            if last_watch.elapsed() >= opts.watch_interval {
+                last_watch = Instant::now();
+                let w = watch.clone();
+                if let Ok(desired) = tokio::task::spawn_blocking(move || w()).await {
+                    reconcile(ctx, opts, &mut defs, &mut clients, &mut set, desired);
+                }
+            }
+        }
+
+        // A link whose connections all gave up is tried again after a pause (the network may be back).
+        for (i, rs) in ctx.shared.all().iter().enumerate() {
+            if !rs.is_down()
+                && rs.workers.load(Ordering::Relaxed) == 0
+                && rs.last_exit.lock().unwrap().elapsed() >= opts.revive_after
+            {
+                restart_route(ctx, opts, &mut defs[i], &mut clients[i], &mut set, i, None);
+            }
+        }
+
+        // Nothing is running: give links time to reappear before giving up.
+        let running: usize = ctx.shared.all().iter().map(|r| r.workers.load(Ordering::Relaxed)).sum();
+        if running == 0 {
+            let since = *no_link_since.get_or_insert_with(Instant::now);
+            if since.elapsed() >= opts.no_link_grace {
+                break;
+            }
+        } else {
+            no_link_since = None;
+        }
+    }
+    // Let the remaining workers see `finished` / the cancel and wind down.
+    while set.join_next().await.is_some() {}
+}
+
+fn spawn_workers(ctx: &Arc<Ctx>, set: &mut JoinSet<()>, route: usize, client: &Client) {
+    let rs = ctx.shared.route(route);
+    for w in 0..rs.max {
+        rs.workers.fetch_add(1, Ordering::Relaxed);
+        let (ctx, rs, client) = (ctx.clone(), rs.clone(), client.clone());
+        set.spawn(async move {
+            let _guard = WorkerGuard(rs.clone());
+            worker(ctx, route, w, client, rs).await;
+        });
+    }
+}
+
+/// Bring the running links in line with `desired`: new links join, vanished links drain, changed links restart.
+fn reconcile(ctx: &Arc<Ctx>, opts: &Options, defs: &mut Vec<Route>, clients: &mut Vec<Client>, set: &mut JoinSet<()>, desired: Vec<Route>) {
+    for d in &desired {
+        match defs.iter().position(|r| r.name == d.name) {
+            Some(i) => {
+                let rs = ctx.shared.route(i);
+                if rs.is_down() || defs[i].key() != d.key() {
+                    let mut d = d.clone();
+                    restart_route(ctx, opts, &mut d, &mut clients[i], set, i, Some(&mut defs[i]));
+                }
+            }
+            None => {
+                let Ok(client) = client_via_proxy(d.link.as_ref(), d.mode, opts.proxy.as_deref()) else { continue };
+                let idx = defs.len();
+                defs.push(d.clone());
+                clients.push(client);
+                let rs = Arc::new(RouteState::new(d, opts, 0, ctx.abort.child_token()));
+                ctx.shared.routes.write().unwrap().push(rs);
+                (ctx.emit)(Event::RouteUp { route: idx, name: d.name.clone() });
+                spawn_workers(ctx, set, idx, &clients[idx]);
+            }
+        }
+    }
+    for (i, r) in defs.iter().enumerate() {
+        let rs = ctx.shared.route(i);
+        if !rs.is_down() && !desired.iter().any(|d| d.name == r.name) {
+            rs.down.store(true, Ordering::Relaxed);
+            rs.stop.cancel(); // its workers hand their chunks back and the other links take them
+            (ctx.emit)(Event::RouteDown { route: i, reason: "the link went away".into() });
+        }
+    }
+}
+
+/// Replace a link's state with a fresh one (keeping its byte count) and start new workers on a new client.
+/// `new_def` replaces the stored definition when the link changed (e.g. a new IP address).
+fn restart_route(ctx: &Arc<Ctx>, opts: &Options, def: &mut Route, client: &mut Client, set: &mut JoinSet<()>, i: usize, stored: Option<&mut Route>) {
+    let Ok(new_client) = client_via_proxy(def.link.as_ref(), def.mode, opts.proxy.as_deref()) else { return };
+    let old = ctx.shared.route(i);
+    old.stop.cancel();
+    let fresh = Arc::new(RouteState::new(def, opts, old.bytes.load(Ordering::Relaxed), ctx.abort.child_token()));
+    ctx.shared.routes.write().unwrap()[i] = fresh;
+    *client = new_client;
+    if let Some(s) = stored {
+        *s = def.clone();
+    }
+    (ctx.emit)(Event::RouteUp { route: i, name: def.name.clone() });
+    spawn_workers(ctx, set, i, client);
+}
+
+async fn worker(ctx: Arc<Ctx>, route: usize, wid: usize, client: Client, rs: Arc<RouteState>) {
     let mut fails = 0u32;
     loop {
-        if ctx.abort.is_cancelled() || ctx.sched.finished() {
+        if ctx.abort.is_cancelled() || rs.stop.is_cancelled() || ctx.sched.finished() {
             break;
         }
         // Over this link's current connection budget: sit idle, the controller may raise it later.
-        if wid >= rs.allowed.load(Ordering::Relaxed) || slow_tail(&ctx, route) {
-            sleep_or_abort(&ctx, Duration::from_millis(100)).await;
+        if wid >= rs.allowed.load(Ordering::Relaxed) || slow_tail(&ctx, &rs) {
+            sleep_or_stop(&rs, Duration::from_millis(100)).await;
             continue;
         }
-        let (idx, start, end, _raced) = match ctx.sched.lease() {
+        let (idx, start, end) = match ctx.sched.lease() {
             Lease::Finished => break,
             Lease::Wait => {
-                sleep_or_abort(&ctx, Duration::from_millis(100)).await;
+                sleep_or_stop(&rs, Duration::from_millis(100)).await;
                 continue;
             }
-            Lease::Chunk { idx, start, end, raced } => (idx, start, end, raced),
+            Lease::Chunk { idx, start, end, .. } => (idx, start, end),
         };
         rs.active.fetch_add(1, Ordering::Relaxed);
-        let r = fetch_chunk(&ctx, &client, route, idx, start, end).await;
+        let r = fetch_chunk(&ctx, &client, route, &rs, idx, start, end).await;
         rs.active.fetch_sub(1, Ordering::Relaxed);
         match r {
             Ok(Outcome::Won) => fails = 0,
@@ -471,7 +655,7 @@ async fn worker(ctx: Arc<Ctx>, route: usize, wid: usize, client: Client) {
                     }
                 }
                 fails += 1;
-                sleep_or_abort(&ctx, backoff(fails)).await;
+                sleep_or_stop(&rs, backoff(fails)).await;
             }
             Err(FetchErr::Retry(msg)) => {
                 let attempts = ctx.sched.release(idx, true);
@@ -482,11 +666,12 @@ async fn worker(ctx: Arc<Ctx>, route: usize, wid: usize, client: Client) {
                 }
                 fails += 1;
                 if fails >= LINK_FAIL_LIMIT {
-                    // This link keeps failing: stop using it, the others take over its chunks.
+                    // This link keeps failing: stop using it for now; the supervisor retries it later
+                    // and the other links take over its chunks in the meantime.
                     (ctx.emit)(Event::RouteDown { route, reason: msg });
                     break;
                 }
-                sleep_or_abort(&ctx, backoff(fails)).await;
+                sleep_or_stop(&rs, backoff(fails)).await;
             }
         }
     }
@@ -496,21 +681,25 @@ fn backoff(fails: u32) -> Duration {
     Duration::from_millis(250u64 << fails.min(5)).min(Duration::from_secs(8))
 }
 
-async fn sleep_or_abort(ctx: &Ctx, d: Duration) {
+/// Sleep, but wake early when the download is cancelled or this link is told to stop.
+async fn sleep_or_stop(rs: &RouteState, d: Duration) {
     tokio::select! {
         _ = tokio::time::sleep(d) => {}
-        _ = ctx.abort.cancelled() => {}
+        _ = rs.stop.cancelled() => {}
     }
 }
 
-async fn fetch_chunk(ctx: &Ctx, client: &Client, route: usize, idx: usize, start: u64, end: u64) -> std::result::Result<Outcome, FetchErr> {
+async fn fetch_chunk(ctx: &Ctx, client: &Client, route: usize, rs: &RouteState, idx: usize, start: u64, end: u64) -> std::result::Result<Outcome, FetchErr> {
     let mut req = client.get(&ctx.url).headers(ctx.headers.clone()).header(RANGE, format!("bytes={start}-{end}"));
     if let Some(v) = &ctx.validator {
         req = req.header(IF_RANGE, v);
     }
     let resp = tokio::select! {
-        _ = ctx.abort.cancelled() => return Err(FetchErr::Cancelled),
-        r = req.send() => r.map_err(|e| FetchErr::Retry(e.to_string()))?,
+        _ = rs.stop.cancelled() => return Err(FetchErr::Cancelled),
+        r = tokio::time::timeout(ctx.stall_timeout, req.send()) => match r {
+            Ok(r) => r.map_err(|e| FetchErr::Retry(e.to_string()))?,
+            Err(_) => return Err(FetchErr::Retry("no response from the server".into())),
+        },
     };
     match resp.status() {
         StatusCode::PARTIAL_CONTENT => {}
@@ -523,7 +712,6 @@ async fn fetch_chunk(ctx: &Ctx, client: &Client, route: usize, idx: usize, start
         s => return Err(FetchErr::Fatal(Error::Status(s.as_u16()))),
     }
 
-    let rs = &ctx.shared.routes[route];
     let mut stream = resp.bytes_stream();
     let (mut pos, mut got) = (start, 0u64);
     let rollback = |got: u64| {
@@ -531,8 +719,11 @@ async fn fetch_chunk(ctx: &Ctx, client: &Client, route: usize, idx: usize, start
     };
     while pos <= end {
         let next = tokio::select! {
-            _ = ctx.abort.cancelled() => { rollback(got); return Err(FetchErr::Cancelled) }
-            n = stream.next() => n,
+            _ = rs.stop.cancelled() => { rollback(got); return Err(FetchErr::Cancelled) }
+            n = tokio::time::timeout(ctx.stall_timeout, stream.next()) => match n {
+                Ok(n) => n,
+                Err(_) => { rollback(got); return Err(FetchErr::Retry("the connection stalled".into())) }
+            },
         };
         if ctx.sched.is_done(idx) {
             rollback(got);
@@ -585,16 +776,19 @@ fn spawn_ticker(shared: Arc<Shared>, emit: Emit) -> tokio::task::JoinHandle<()> 
     tokio::spawn(async move {
         let tick = Duration::from_millis(250);
         let mut last_global = shared.global.load(Ordering::Relaxed);
-        let mut last_routes: Vec<u64> = shared.routes.iter().map(|r| r.bytes.load(Ordering::Relaxed)).collect();
-        let (mut ema, mut route_ema) = (0.0f64, vec![0.0f64; shared.routes.len()]);
+        let (mut ema, mut last_routes, mut route_ema): (f64, Vec<u64>, Vec<f64>) = (0.0, Vec::new(), Vec::new());
         loop {
             tokio::time::sleep(tick).await;
             let secs = tick.as_secs_f64();
             let g = shared.global.load(Ordering::Relaxed);
             ema = 0.5 * ema + 0.5 * (g.saturating_sub(last_global) as f64 / secs);
             last_global = g;
-            let routes = shared
-                .routes
+            let states = shared.all();
+            while last_routes.len() < states.len() {
+                last_routes.push(states[last_routes.len()].bytes.load(Ordering::Relaxed));
+                route_ema.push(0.0);
+            }
+            let routes = states
                 .iter()
                 .enumerate()
                 .map(|(i, r)| {
@@ -602,7 +796,7 @@ fn spawn_ticker(shared: Arc<Shared>, emit: Emit) -> tokio::task::JoinHandle<()> 
                     route_ema[i] = 0.5 * route_ema[i] + 0.5 * (b.saturating_sub(last_routes[i]) as f64 / secs);
                     last_routes[i] = b;
                     r.speed.store(route_ema[i].to_bits(), Ordering::Relaxed);
-                    RouteStat { name: r.name.clone(), bytes: b, bytes_per_sec: route_ema[i], connections: r.active.load(Ordering::Relaxed) }
+                    RouteStat { name: r.name.clone(), bytes: b, bytes_per_sec: route_ema[i], connections: r.active.load(Ordering::Relaxed), down: r.is_down() || r.workers.load(Ordering::Relaxed) == 0 }
                 })
                 .collect();
             // A raced duplicate counts until the losing copy aborts; never report more than the file size.
@@ -639,23 +833,30 @@ fn verify_checksum(opts: &Options, staging: &Path, resume: Option<(&Store, &str)
     res
 }
 
-fn slow_tail(ctx: &Ctx, route: usize) -> bool {
-    let routes = &ctx.shared.routes;
+fn slow_tail(ctx: &Ctx, me: &RouteState) -> bool {
+    let routes = ctx.shared.all();
     if routes.len() < 2 {
         return false;
     }
     let speed = |r: &RouteState| f64::from_bits(r.speed.load(Ordering::Relaxed));
-    let Some((best, best_state)) = routes.iter().map(|r| (speed(r), r)).max_by(|a, b| a.0.total_cmp(&b.0)) else { return false };
-    is_slow_tail(speed(&routes[route]), best, ctx.sched.pending_len(), best_state.allowed.load(Ordering::Relaxed))
+    let Some((best, best_state)) = routes.iter().filter(|r| !r.is_down()).map(|r| (speed(r), r)).max_by(|a, b| a.0.total_cmp(&b.0)) else { return false };
+    is_slow_tail(speed(me), best, ctx.sched.pending_len(), best_state.allowed.load(Ordering::Relaxed))
 }
 
 /// Every `interval`, let each link's connection count follow its measured speed.
-fn spawn_ramp(shared: Arc<Shared>, max_per_route: Vec<usize>, interval: Duration) -> tokio::task::JoinHandle<()> {
+fn spawn_ramp(shared: Arc<Shared>, interval: Duration) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let mut ramps: Vec<Ramp> = max_per_route.iter().map(|&m| Ramp::new(m, true)).collect();
+        // One ramp per link state; a restarted link gets a new state and so a fresh ramp.
+        let mut ramps: Vec<(Arc<RouteState>, Ramp)> = Vec::new();
         loop {
             tokio::time::sleep(interval).await;
-            for (r, ramp) in shared.routes.iter().zip(ramps.iter_mut()) {
+            for (i, r) in shared.all().into_iter().enumerate() {
+                if ramps.len() <= i {
+                    ramps.push((r.clone(), Ramp::new(r.max, true)));
+                } else if !Arc::ptr_eq(&ramps[i].0, &r) {
+                    ramps[i] = (r.clone(), Ramp::new(r.max, true));
+                }
+                let ramp = &mut ramps[i].1;
                 ramp.allowed = r.allowed.load(Ordering::Relaxed);
                 // Throttling lowers the ceiling from the worker side.
                 let ceiling = r.ceiling.load(Ordering::Relaxed);

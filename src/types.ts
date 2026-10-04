@@ -22,7 +22,7 @@ export type AddOptions = { filename?: string; dir?: string; checksum?: string; u
 
 export type AddResult = { id: string; duplicate: boolean };
 
-export type RouteStat = { name: string; bytes: number; bytes_per_sec: number; connections: number };
+export type RouteStat = { name: string; bytes: number; bytes_per_sec: number; connections: number; down: boolean };
 
 export type EngineEvent =
   | { type: "started"; filename: string; total: number | null; chunks: number; ranges: boolean; resumed_chunks: number }
@@ -30,6 +30,7 @@ export type EngineEvent =
   | { type: "progress"; downloaded: number; total: number | null; bytes_per_sec: number; routes: RouteStat[] }
   | { type: "chunk_done"; idx: number; route: number }
   | { type: "route_down"; route: number; reason: string }
+  | { type: "route_up"; route: number; name: string }
   | { type: "finished"; path: string };
 
 export type Settings = {

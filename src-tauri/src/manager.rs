@@ -478,7 +478,8 @@ impl Manager {
         }
     }
 
-    fn routes(&self) -> Vec<Route> {
+    /// The links to use right now, per settings. May be empty (no network).
+    fn link_routes(&self) -> Vec<Route> {
         let (enabled, rules, skip_cellular, conns) = {
             let g = self.inner.lock().unwrap();
             (g.settings.enabled_links.clone(), g.settings.link_rules.clone(), g.settings.skip_cellular, g.settings.conns_per_route)
@@ -498,6 +499,12 @@ impl Manager {
                 r
             })
             .collect();
+        routes
+    }
+
+    /// Like `link_routes`, but falls back to the OS default route so a download can still start with no usable link.
+    fn routes(&self) -> Vec<Route> {
+        let routes = self.link_routes();
         if routes.is_empty() {
             vec![Route::unbound("default")]
         } else {
@@ -519,6 +526,9 @@ impl Manager {
         opts.headers = item.headers.clone();
         opts.conns_per_route = conns;
         opts.store = Some(self.store.clone());
+        // Links that come and go (cable plugged in, Wi-Fi back after sleep) join or leave this download.
+        let watcher = self.clone();
+        opts.link_watch = Some(Arc::new(move || watcher.link_routes()));
         opts.speed_limit = (limit > 0).then(|| limit * 1024);
         opts.proxy = item.proxy.clone().or_else(|| Some(global_proxy).filter(|p| !p.is_empty()));
         if let Some(c) = &item.checksum {

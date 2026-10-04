@@ -100,6 +100,16 @@ async fn main() {
             std::fs::create_dir_all(&db).ok();
             let mut opts = Options::new(url, out, routes);
             opts.conns_per_route = conns;
+            // Cables and Wi-Fi can come and go mid-download; follow them (still limited to --only).
+            let only_watch = only.clone();
+            opts.link_watch = Some(Arc::new(move || {
+                list_links()
+                    .iter()
+                    .filter(|l| only_watch.is_empty() || only_watch.contains(&l.name))
+                    .filter(|l| l.kind != grabnr_core::LinkKind::Tunnel)
+                    .map(Route::from_link)
+                    .collect()
+            }));
             opts.proxy = proxy;
             opts.auth = match (bearer, user) {
                 (Some(t), _) => Some(grabnr_core::Auth::Bearer(t)),
@@ -138,6 +148,7 @@ async fn main() {
                 ),
                 Event::ResumeDiscarded { reason } => eprintln!("starting over: {reason}"),
                 Event::RouteDown { route, reason } => eprintln!("\nlink #{route} dropped out: {reason}"),
+                Event::RouteUp { name, .. } => eprintln!("\nlink {name} joined"),
                 Event::Progress(s) => {
                     let pct = s.total.filter(|t| *t > 0).map(|t| format!("{:>3}%", s.downloaded * 100 / t)).unwrap_or_default();
                     let per: Vec<String> = s.routes.iter().map(|r| format!("{} {}/s", r.name, human(r.bytes_per_sec as u64))).collect();
