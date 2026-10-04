@@ -20,20 +20,20 @@ function run(it: Item) {
   const done = new Set<number>();
   let next = 0;
   handlers?.event(it.id, { type: "started", filename: it.filename ?? "file", total: it.total, chunks, ranges: true, resumed_chunks: 0 });
-  const speeds = [5.2e6, 3.1e6];
-  const wire = [0, 0];
+  const speeds = [5.2e6, 8.1e6, 2.2e6];
+  const wire = [0, 0, 0];
   const t = window.setInterval(() => {
     const jitter = () => 0.8 + Math.random() * 0.4;
     const rs = speeds.map((s, i) => {
       const bps = s * jitter();
       wire[i] += bps * 0.25;
-      return { name: i ? "en0" : "en5", bytes: wire[i], bytes_per_sec: bps, connections: 8 };
+      return { name: ["en0", "en5", "en7"][i], bytes: wire[i], bytes_per_sec: bps, connections: 8 };
     });
     const total = rs.reduce((a, r) => a + r.bytes_per_sec, 0);
     it.downloaded = Math.min(it.total ?? 0, it.downloaded + total * 0.25);
     const should = Math.floor((it.downloaded / (it.total ?? 1)) * chunks);
     while (next < should) {
-      const route = Math.random() < 0.62 ? 0 : 1;
+      const route = Math.floor(Math.random() * 3);
       done.add(next);
       handlers?.event(it.id, { type: "chunk_done", idx: next++, route });
     }
@@ -60,9 +60,11 @@ export const mock = {
     switch (cmd) {
       case "get_state": {
         if (!items.length) {
-          seed("ubuntu-26.04-desktop-amd64.iso", 6.2e9, "downloading", 1.4e9);
-          seed("dataset-train.tar.zst", 1.8e9, "paused", 0.6e9);
-          seed("report.pdf", 12e6, "done", 12e6);
+          seed("Lo-fi Mix.mp3", 120e6, "done", 120e6);
+          seed("UI Inspiration Pack.zip", 850e6, "done", 850e6);
+          seed("Project Files.zip", 2.1e9, "paused", 0.7e9);
+          seed("Figma Setup.dmg", 520e6, "downloading", 160e6);
+          seed("Beautiful Nature 4K.mp4", 2.4e9, "downloading", 1.2e9);
           const bad = seed("backup.zip", 400e6, "error", 0);
           bad.error = "HTTP 404 Not Found";
         }
@@ -71,8 +73,9 @@ export const mock = {
       case "get_links":
         return {
           links: [
-            { name: "en5", label: "USB 10/100/1000 LAN", kind: "ethernet", ipv4: "192.168.89.56", gateway: "192.168.88.1", is_default_route: true, link_speed_mbps: 1000 },
             { name: "en0", label: "Wi-Fi", kind: "wi_fi", ipv4: "10.0.0.14", gateway: "10.0.0.1", is_default_route: false, link_speed_mbps: 866 },
+            { name: "en5", label: "Ethernet", kind: "ethernet", ipv4: "192.168.89.56", gateway: "192.168.88.1", is_default_route: true, link_speed_mbps: 1000 },
+            { name: "en7", label: "iPhone Hotspot", kind: "cellular", ipv4: "172.20.10.2", gateway: "172.20.10.1", is_default_route: false, link_speed_mbps: null },
           ],
           shared_gateways: [],
         } satisfies LinksResponse;
@@ -89,6 +92,9 @@ export const mock = {
       case "get_autostart": return autostart;
       case "set_autostart": autostart = Boolean(args.enabled); return autostart;
       case "allow_pairing": return 60;
+      case "pause_all": items.filter((i) => i.status === "downloading").forEach((i) => { clearInterval(timers.get(i.id)); i.status = "paused"; handlers?.item({ ...i }); }); return;
+      case "resume_all": items.filter((i) => i.status === "paused").forEach(run); return;
+      case "quit_app": case "show_main_window": return;
       case "run_spike": throw "Link test is only available in the desktop app";
       default: return;
     }

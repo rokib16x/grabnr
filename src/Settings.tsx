@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
-import { routeColor } from "./format";
+import { linkColor } from "./format";
 import type { LinksResponse, Settings as S, SpikeReport } from "./types";
 
 export function SettingsPanel({ settings, apiPort, apiOk, onChange, onClose }: { settings: S; apiPort: number; apiOk: boolean; onChange: (s: S) => void; onClose: () => void }) {
@@ -57,7 +57,7 @@ export function SettingsPanel({ settings, apiPort, apiOk, onChange, onClose }: {
       <div className="sheet wide">
         <div className="sheet-head">
           <h2>Settings</h2>
-          <button className="ghost" onClick={onClose}>Done</button>
+          <button className="primary" onClick={onClose}>Done</button>
         </div>
 
         <section>
@@ -93,10 +93,10 @@ export function SettingsPanel({ settings, apiPort, apiOk, onChange, onClose }: {
           <h3>Network links</h3>
           {!links && <p className="muted">Looking for links…</p>}
           {links?.links.length === 0 && <p className="muted">No active links found. Downloads use the system default route.</p>}
-          {links?.links.map((l, i) => (
+          {links?.links.map((l) => (
             <label key={l.name} className="link">
               <input type="checkbox" checked={enabled(l.name)} onChange={() => toggle(l.name)} />
-              <i style={{ background: routeColor(i) }} />
+              <i style={{ background: linkColor(l.name) }} />
               <b>{l.name}</b> {l.label} <span className="muted">{l.kind.replace("_", "-")} · {l.ipv4}{l.is_default_route ? " · default route" : ""}</span>
             </label>
           ))}

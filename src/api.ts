@@ -10,7 +10,11 @@ const call = <T,>(cmd: string, args?: Record<string, unknown>) => (native ? invo
 export const api = {
   state: () => call<AppState>("get_state"),
   links: () => call<LinksResponse>("get_links"),
-  add: (url: string, filename?: string) => call<string>("add_download", { url, filename: filename || null }),
+  add: (url: string, filename?: string, dir?: string) => call<string>("add_download", { url, filename: filename || null, dir: dir || null }),
+  pauseAll: () => call<void>("pause_all"),
+  resumeAll: () => call<void>("resume_all"),
+  quit: () => call<void>("quit_app"),
+  showMain: (settings = false) => call<void>("show_main_window", { settings }),
   pause: (id: string) => call<void>("pause_download", { id }),
   resume: (id: string) => call<void>("resume_download", { id }),
   remove: (id: string, deleteFiles: boolean) => call<void>("remove_download", { id, deleteFiles }),
@@ -25,6 +29,13 @@ export const api = {
 };
 
 type Handlers = { item: (i: Item) => void; removed: (id: string) => void; event: (id: string, e: EngineEvent) => void };
+
+/** Called when the menu bar popover asks the main window to open Preferences. */
+export function onOpenSettings(cb: () => void): () => void {
+  if (!native) return () => {};
+  const p = listen("open-settings", cb);
+  return () => void p.then((un) => un());
+}
 
 /** Subscribe to backend events; returns an unsubscribe function. */
 export function subscribe(h: Handlers): () => void {

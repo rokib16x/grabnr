@@ -20,6 +20,47 @@ export function eta(remaining: number, bps: number): string {
   return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 }
 
-/** One stable colour per link index, shared by the share bar, chunk grid and graph. */
-export const ROUTE_COLORS = ["#3b82f6", "#f59e0b", "#10b981", "#a855f7", "#ef4444", "#14b8a6"];
-export const routeColor = (i: number) => ROUTE_COLORS[i % ROUTE_COLORS.length];
+const KIND_COLORS: Record<string, string> = { wi_fi: "#34c759", ethernet: "#0a84ff", cellular: "#af52de", other: "#ff9f0a", tunnel: "#5ac8fa" };
+const SPARE = ["#ff375f", "#64d2ff", "#ffd60a", "#bf5af2", "#30d158", "#ff6b57"];
+const registry = new Map<string, string>();
+
+/** Give each network link one colour, by kind, used by the sidebar, share bars, chunk map and graph. */
+export function registerLinks(links: { name: string; kind: string }[]) {
+  const used = new Set<string>();
+  links.forEach((l) => {
+    let c = KIND_COLORS[l.kind] ?? KIND_COLORS.other;
+    if (used.has(c)) c = SPARE.find((s) => !used.has(s)) ?? c;
+    used.add(c);
+    registry.set(l.name, c);
+  });
+}
+
+export const linkColor = (name: string) => {
+  if (!registry.has(name)) registry.set(name, SPARE[registry.size % SPARE.length]);
+  return registry.get(name)!;
+};
+
+export const fileName = (url: string, filename: string | null) => {
+  if (filename) return filename;
+  try {
+    return decodeURIComponent(new URL(url).pathname.split("/").filter(Boolean).pop() ?? url);
+  } catch {
+    return url;
+  }
+};
+
+const KINDS: [RegExp, string, string][] = [
+  [/^(zip|rar|7z|tar|gz|tgz|bz2|xz|zst)$/, "#ff9f0a", "#e08600"],
+  [/^(dmg|iso|img|pkg)$/, "#8e8e93", "#636366"],
+  [/^(mp4|mkv|mov|avi|webm|m4v)$/, "#0a84ff", "#0060d0"],
+  [/^(mp3|m4a|flac|wav|aac|ogg)$/, "#ff375f", "#d70f3c"],
+  [/^(pdf)$/, "#ff453a", "#d62a20"],
+  [/^(png|jpe?g|gif|webp|heic|svg)$/, "#30b0c7", "#1a8fa3"],
+  [/^(exe|msi|deb|rpm|apk|appimage|app)$/, "#5e5ce6", "#4240b8"],
+];
+/** Tile colours and label for a file, picked from its extension. */
+export function fileKind(name: string) {
+  const ext = (name.split(".").pop() ?? "").toLowerCase();
+  const hit = KINDS.find(([re]) => re.test(ext));
+  return { from: hit?.[1] ?? "#64a8ff", to: hit?.[2] ?? "#2f7cf6", label: ext.length > 0 && ext.length <= 4 && ext !== name.toLowerCase() ? ext.toUpperCase() : "FILE" };
+}

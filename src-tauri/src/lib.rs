@@ -8,8 +8,8 @@ use manager::{AddRequest, ItemView, Manager, Settings, SettingsPatch};
 use serde::Serialize;
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
-use tauri::tray::TrayIconBuilder;
-use tauri::{Manager as _, State, WindowEvent};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Emitter as _, Manager as _, State, WindowEvent};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt as _};
 use tauri_plugin_opener::OpenerExt;
 
@@ -42,12 +42,12 @@ fn get_state(m: Mgr) -> AppState {
 }
 
 #[tauri::command]
-fn add_download(m: Mgr, url: String, filename: Option<String>) -> Result<String, String> {
+fn add_download(m: Mgr, url: String, filename: Option<String>, dir: Option<String>) -> Result<String, String> {
     let url = url.trim().to_string();
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err("Enter a full http:// or https:// link".into());
     }
-    Ok(m.inner().add(AddRequest { url, filename, headers: Vec::new() }))
+    Ok(m.inner().add(AddRequest { url, filename, headers: Vec::new(), dir }))
 }
 
 #[tauri::command]
@@ -101,6 +101,58 @@ fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<bool, String> {
     Ok(a.is_enabled().unwrap_or(enabled))
 }
 
+#[tauri::command]
+fn pause_all(m: Mgr) {
+    m.pause_all();
+}
+
+#[tauri::command]
+fn resume_all(m: Mgr) {
+    m.inner().resume_all();
+}
+
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
+/// From the menu bar popover: bring the main window forward, optionally on the settings sheet.
+#[tauri::command]
+fn show_main_window(app: tauri::AppHandle, settings: bool) {
+    hide_popover(&app);
+    show_main(&app);
+    if settings {
+        let _ = app.emit_to("main", "open-settings", ());
+    }
+}
+
+fn hide_popover(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("tray") {
+        let _ = w.hide();
+    }
+}
+
+/// Show the popover centred under the menu bar icon, kept on the screen it was clicked on.
+fn toggle_popover(app: &tauri::AppHandle, icon: tauri::Rect) {
+    let Some(w) = app.get_webview_window("tray") else { return };
+    if w.is_visible().unwrap_or(false) {
+        let _ = w.hide();
+        return;
+    }
+    let scale = w.scale_factor().unwrap_or(1.0);
+    let pos = icon.position.to_physical::<f64>(scale);
+    let size = icon.size.to_physical::<f64>(scale);
+    let width = w.outer_size().map(|s| s.width as f64).unwrap_or(340.0 * scale);
+    let mut x = pos.x + size.width / 2.0 - width / 2.0;
+    if let Ok(Some(mon)) = app.monitor_from_point(pos.x, pos.y) {
+        let (left, right) = (mon.position().x as f64, mon.position().x as f64 + mon.size().width as f64);
+        x = x.clamp(left + 8.0 * scale, right - width - 8.0 * scale);
+    }
+    let _ = w.set_position(tauri::PhysicalPosition::new(x, pos.y + size.height + 6.0 * scale));
+    let _ = w.show();
+    let _ = w.set_focus();
+}
+
 fn show_main(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
@@ -139,6 +191,12 @@ fn build_tray(app: &tauri::AppHandle, m: Arc<Manager>) -> tauri::Result<()> {
         .icon_as_template(true)
         .tooltip("grabnr")
         .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_tray_icon_event(|tray, ev| {
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, rect, .. } = ev {
+                toggle_popover(tray.app_handle(), rect);
+            }
+        })
         .on_menu_event(move |app, ev| match ev.id.as_ref() {
             "show" => show_main(app),
             "pause_all" => mm.pause_all(),
@@ -201,9 +259,16 @@ pub fn run() {
         })
         // Closing the window hides it; downloads and the browser-extension API keep running.
         .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+            match event {
+                WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+                // The menu bar popover behaves like a menu: clicking elsewhere dismisses it.
+                WindowEvent::Focused(false) if window.label() == "tray" => {
+                    let _ = window.hide();
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -217,6 +282,10 @@ pub fn run() {
             open_download,
             set_settings,
             allow_pairing,
+            pause_all,
+            resume_all,
+            quit_app,
+            show_main_window,
             get_autostart,
             set_autostart,
             run_spike

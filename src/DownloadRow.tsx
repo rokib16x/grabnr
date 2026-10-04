@@ -1,102 +1,79 @@
-import { useState } from "react";
 import { api } from "./api";
-import { ChunkGrid } from "./ChunkGrid";
-import { bytes, eta, rate, routeColor } from "./format";
-import { SpeedGraph } from "./SpeedGraph";
+import { FileIcon } from "./FileIcon";
+import { bytes, eta, fileName, linkColor, rate } from "./format";
+import { Icon } from "./icons";
+import { MoreMenu } from "./Menu";
 import type { Item, Live } from "./types";
 
-const LABEL: Record<Item["status"], string> = { queued: "Queued", downloading: "Downloading", paused: "Paused", done: "Done", error: "Failed" };
-
-export function DownloadRow({ item, live }: { item: Item; live?: Live }) {
-  const [open, setOpen] = useState(false);
+export function progressOf(item: Item, live?: Live) {
   const downloaded = item.status === "downloading" ? Math.max(live?.downloaded ?? 0, item.downloaded) : item.downloaded;
   const pct = item.total ? Math.min(100, (downloaded / item.total) * 100) : item.status === "done" ? 100 : 0;
   const speed = item.status === "downloading" ? (live?.speed ?? 0) : 0;
+  return { downloaded, pct, speed };
+}
+
+/** Progress bar; while downloading it is coloured by how many bytes each link carried. */
+export function ProgressBar({ item, live, thin }: { item: Item; live?: Live; thin?: boolean }) {
+  const { pct } = progressOf(item, live);
   const routes = live?.routes ?? [];
   const wire = routes.reduce((a, r) => a + r.bytes, 0) || 1;
-  const name = item.filename ?? item.url.split("/").pop() ?? item.url;
-  const active = item.status === "downloading";
-
+  const split = item.status === "downloading" && routes.length > 1 && routes.some((r) => r.bytes > 0);
   return (
-    <li className={`row ${item.status}`}>
-      <div className="row-main" onClick={() => setOpen(!open)}>
-        <div className="row-top">
-          <span className="name" title={item.url}>{name}</span>
-          <span className={`badge ${item.status}`}>{LABEL[item.status]}</span>
+    <div className={`bar ${item.status}${thin ? " thin" : ""}`} role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>
+      {split ? (
+        <div className="fill split" style={{ width: `${pct}%` }}>
+          {routes.map((r) => (
+            <span key={r.name} style={{ width: `${(r.bytes / wire) * 100}%`, background: linkColor(r.name) }} />
+          ))}
         </div>
-        <div className="bar" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>
-          {active && routes.length > 1 && routes.some((r) => r.bytes > 0) ? (
-            // While downloading, colour the bar by each link's share of the bytes it carried.
-            <div className="fill split" style={{ width: `${pct}%` }}>
-              {routes.map((r, i) => (
-                <span key={r.name} style={{ width: `${(r.bytes / wire) * 100}%`, background: routeColor(i) }} />
-              ))}
-            </div>
-          ) : (
-            <div className="fill" style={{ width: `${pct}%` }} />
-          )}
-        </div>
-        <div className="row-meta">
-          <span>
-            {item.total ? `${bytes(downloaded)} of ${bytes(item.total)}` : bytes(downloaded)}
-            {item.total ? ` · ${pct.toFixed(0)}%` : ""}
-          </span>
-          {active && (
-            <span>
-              {rate(speed)}
-              {item.total ? ` · ${eta(item.total - downloaded, speed)} left` : ""}
-            </span>
-          )}
-          {item.status === "error" && <span className="err">{item.error}</span>}
-        </div>
-        {active && routes.length > 0 && (
-          <div className="chips">
-            {routes.map((r, i) => (
-              <span key={r.name} className="chip">
-                <i style={{ background: routeColor(i) }} />
-                {r.name} {rate(r.bytes_per_sec)} <small>{r.connections} conn</small>
-              </span>
-            ))}
-          </div>
-        )}
-        {live?.notice && <div className="notice">{live.notice}</div>}
-      </div>
-
-      <div className="actions">
-        {(item.status === "downloading" || item.status === "queued") && <button onClick={() => api.pause(item.id)}>Pause</button>}
-        {(item.status === "paused" || item.status === "error") && <button onClick={() => api.resume(item.id)}>{item.status === "error" ? "Retry" : "Resume"}</button>}
-        {item.status === "done" && (
-          <>
-            <button onClick={() => api.open(item.id)}>Open</button>
-            <button onClick={() => api.reveal(item.id)}>Show in Finder</button>
-          </>
-        )}
-        <button className="ghost" onClick={() => api.remove(item.id, false)}>Remove</button>
-        {item.status !== "done" && (
-          <button className="ghost danger" onClick={() => confirm("Remove and delete the partial file?") && api.remove(item.id, true)}>Delete</button>
-        )}
-      </div>
-
-      {open && (
-        <div className="detail">
-          <div className="url">{item.url}</div>
-          {live && live.chunks.length > 0 && (
-            <>
-              <h4>
-                Chunks <small>{live.chunks.length} total{live.resumedChunks ? ` · ${live.resumedChunks} kept from an earlier session` : ""}</small>
-              </h4>
-              <ChunkGrid chunks={live.chunks} version={live.v} />
-            </>
-          )}
-          {active && live && live.history.length > 0 && (
-            <>
-              <h4>Speed per link</h4>
-              <SpeedGraph history={live.history} names={routes.map((r) => r.name)} />
-            </>
-          )}
-          {!live && item.status !== "done" && <p className="muted">Details appear once the download is running.</p>}
-        </div>
+      ) : (
+        <div className="fill" style={{ width: `${pct}%` }} />
       )}
+    </div>
+  );
+}
+
+export function statusLine(item: Item, downloaded: number, speed: number) {
+  const size = item.total ? `${bytes(downloaded)} of ${bytes(item.total)}` : bytes(downloaded);
+  if (item.status === "downloading") return `${size} · ${rate(speed)}${item.total && speed ? ` · ${eta(item.total - downloaded, speed)} left` : ""}`;
+  if (item.status === "queued") return "Waiting to start";
+  if (item.status === "paused") return `${item.total ? bytes(item.total) : bytes(downloaded)} · Paused`;
+  if (item.status === "error") return item.error ?? "Failed";
+  return `${item.total ? bytes(item.total) : bytes(downloaded)} · Completed`;
+}
+
+export function PlayPause({ item }: { item: Item }) {
+  if (item.status === "downloading" || item.status === "queued") return <button className="round" aria-label="Pause" onClick={(e) => { e.stopPropagation(); api.pause(item.id); }}><Icon name="pause" /></button>;
+  if (item.status === "done") return <span className="done-mark" aria-label="Completed"><Icon name="check" size={14} /></span>;
+  return <button className="round" aria-label={item.status === "error" ? "Retry" : "Resume"} onClick={(e) => { e.stopPropagation(); api.resume(item.id); }}><Icon name="play" /></button>;
+}
+
+export function DownloadRow({ item, live, selected, onSelect }: { item: Item; live?: Live; selected: boolean; onSelect: () => void }) {
+  const { downloaded, pct, speed } = progressOf(item, live);
+  const name = fileName(item.url, item.filename);
+  return (
+    <li className={`row ${item.status}${selected ? " selected" : ""}`} onClick={onSelect} onDoubleClick={() => item.status === "done" && api.open(item.id)}>
+      <FileIcon name={name} />
+      <div className="row-body">
+        <div className="row-line">
+          <span className="name" title={item.url}>{name}</span>
+          {item.status !== "done" && <span className="pct">{item.status === "error" ? "" : `${Math.round(pct)}%`}</span>}
+        </div>
+        <div className={`meta ${item.status === "error" ? "err" : ""}`}>{statusLine(item, downloaded, speed)}</div>
+        <ProgressBar item={item} live={live} />
+      </div>
+      <div className="row-actions">
+        <PlayPause item={item} />
+        <MoreMenu
+          items={[
+            ...(item.status === "done" ? [{ label: "Open", onClick: () => api.open(item.id) }, { label: "Show in Finder", onClick: () => api.reveal(item.id) }] : []),
+            { label: "Copy link", onClick: () => void navigator.clipboard?.writeText(item.url) },
+            "sep",
+            { label: "Remove from list", onClick: () => api.remove(item.id, false) },
+            ...(item.status !== "done" ? [{ label: "Cancel and delete partial file", danger: true, onClick: () => api.remove(item.id, true) }] : []),
+          ]}
+        />
+      </div>
     </li>
   );
 }

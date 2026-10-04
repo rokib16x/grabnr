@@ -1,8 +1,8 @@
 import { useEffect, useRef } from "react";
-import { routeColor } from "./format";
+import { linkColor } from "./format";
 
 /** One cell per chunk, coloured by the link that fetched it. Very large files are bucketed. */
-export function ChunkGrid({ chunks, version }: { chunks: Uint8Array; version: number }) {
+export function ChunkGrid({ chunks, version, names }: { chunks: Uint8Array; version: number; names: string[] }) {
   const ref = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -10,7 +10,7 @@ export function ChunkGrid({ chunks, version }: { chunks: Uint8Array; version: nu
     if (!c) return;
     const dpr = window.devicePixelRatio || 1;
     const width = c.clientWidth;
-    const cell = 9;
+    const cell = 10;
     const cols = Math.max(1, Math.floor(width / cell));
     const buckets = Math.min(chunks.length, cols * 12);
     const per = chunks.length / Math.max(buckets, 1);
@@ -37,10 +37,10 @@ export function ChunkGrid({ chunks, version }: { chunks: Uint8Array; version: nu
       let best = 0;
       counts.forEach((n, r) => n > best && ((best = n), (top = r)));
       g.globalAlpha = done === 0 ? 1 : done === to - from ? 1 : 0.55;
-      g.fillStyle = done === 0 ? empty : routeColor(top - 1);
+      g.fillStyle = done === 0 ? empty : linkColor(names[top - 1] ?? "");
       g.fillRect((b % cols) * cell, Math.floor(b / cols) * cell, cell - 2, cell - 2);
     }
-  }, [chunks, version]);
+  }, [chunks, version, names]);
 
   return <canvas ref={ref} className="grid" aria-label="Chunk map" />;
 }

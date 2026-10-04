@@ -93,6 +93,8 @@ pub struct AddRequest {
     pub url: String,
     pub filename: Option<String>,
     pub headers: Vec<(String, String)>,
+    /// Save folder for this download; falls back to the default in settings.
+    pub dir: Option<String>,
 }
 
 struct Inner {
@@ -230,7 +232,7 @@ impl Manager {
         let id = random_hex(8);
         {
             let mut g = self.inner.lock().unwrap();
-            let dir = g.settings.dest_dir.clone();
+            let dir = req.dir.filter(|d| !d.trim().is_empty()).unwrap_or_else(|| g.settings.dest_dir.clone());
             g.items.insert(
                 0,
                 Item {
