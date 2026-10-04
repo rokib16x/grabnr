@@ -68,7 +68,7 @@ export function SettingsPanel({ settings, apiPort, apiOk, onChange, onClose }: {
             <button onClick={async () => { const d = await api.pickFolder(); if (d) patch({ dest_dir: d }); }}>Change…</button>
           </div>
           <div className="field">
-            <span>Connections per link</span>
+            <span>Max connections per link</span>
             <input type="number" min={1} max={32} value={settings.conns_per_route} onChange={(e) => patch({ conns_per_route: +e.target.value })} />
           </div>
           <div className="field">

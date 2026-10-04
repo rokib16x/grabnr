@@ -128,6 +128,11 @@ impl Scheduler {
         g.attempts[idx]
     }
 
+    /// Chunks nobody has started yet.
+    pub fn pending_len(&self) -> usize {
+        self.0.lock().unwrap().pending.len()
+    }
+
     pub fn is_done(&self, idx: usize) -> bool {
         matches!(self.0.lock().unwrap().state[idx], State::Done)
     }

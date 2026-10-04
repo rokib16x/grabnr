@@ -1,6 +1,7 @@
 //! grabnr engine: discover network links, bind transfers to them, and measure
 //! whether traffic really leaves through the interface we asked for.
 
+pub mod adapt;
 pub mod bind;
 pub mod checksum;
 pub mod disk;

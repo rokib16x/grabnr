@@ -11,6 +11,7 @@ use reqwest::{Client, StatusCode};
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
+use crate::adapt::{is_slow_tail, Ramp};
 use crate::bind::{client_pooled, BindMode};
 use crate::checksum::{self, Checksum};
 use crate::disk;
@@ -58,6 +59,10 @@ pub struct Options {
     pub speed_limit: Option<u64>,
     /// Verified after the last chunk; a mismatch fails the download and discards the partial file.
     pub checksum: Option<Checksum>,
+    /// Start each link with a few connections and add more while that pays off, up to `conns_per_route`.
+    pub adaptive: bool,
+    /// How often the adaptive controller looks at link speeds.
+    pub ramp_interval: Duration,
 }
 
 impl Options {
@@ -73,6 +78,8 @@ impl Options {
             max_attempts: 6,
             speed_limit: None,
             checksum: None,
+            adaptive: true,
+            ramp_interval: Duration::from_secs(2),
         }
     }
 }
@@ -114,6 +121,10 @@ struct RouteState {
     name: String,
     bytes: AtomicU64,
     allowed: AtomicUsize,
+    /// Most connections this link may use; lowered when the server throttles.
+    ceiling: AtomicUsize,
+    /// Smoothed bytes/s, written by the progress ticker.
+    speed: AtomicU64,
     active: AtomicUsize,
     last_throttle: Mutex<Instant>,
     limit: Option<Limiter>,
@@ -206,7 +217,9 @@ pub async fn download(opts: Options, cancel: CancellationToken, emit: Emit) -> R
             .map(|r| RouteState {
                 name: r.name.clone(),
                 bytes: AtomicU64::new(0),
-                allowed: AtomicUsize::new(opts.conns_per_route.max(1)),
+                allowed: AtomicUsize::new(Ramp::new(opts.conns_per_route, opts.adaptive).allowed),
+                ceiling: AtomicUsize::new(opts.conns_per_route.max(1)),
+                speed: AtomicU64::new(0),
                 active: AtomicUsize::new(0),
                 last_throttle: Mutex::new(Instant::now() - Duration::from_secs(60)),
                 limit: r.speed_limit.map(Limiter::new),
@@ -297,6 +310,7 @@ async fn ranged(
     });
 
     let ticker = spawn_ticker(shared.clone(), emit.clone());
+    let ramp = opts.adaptive.then(|| spawn_ramp(shared.clone(), opts.conns_per_route, opts.ramp_interval));
     let mut workers = Vec::new();
     for (r, client) in clients.iter().enumerate() {
         for w in 0..opts.conns_per_route.max(1) {
@@ -307,6 +321,9 @@ async fn ranged(
         let _ = w.await;
     }
     ticker.abort();
+    if let Some(r) = ramp {
+        r.abort();
+    }
     let _ = ctx.file.sync();
 
     if let Some(e) = ctx.fatal.lock().unwrap().take() {
@@ -390,8 +407,13 @@ async fn worker(ctx: Arc<Ctx>, route: usize, wid: usize, client: Client) {
     let rs = &ctx.shared.routes[route];
     let mut fails = 0u32;
     loop {
-        if ctx.abort.is_cancelled() || wid >= rs.allowed.load(Ordering::Relaxed) {
+        if ctx.abort.is_cancelled() || ctx.sched.finished() {
             break;
+        }
+        // Over this link's current connection budget: sit idle, the controller may raise it later.
+        if wid >= rs.allowed.load(Ordering::Relaxed) || slow_tail(&ctx, route) {
+            sleep_or_abort(&ctx, Duration::from_millis(100)).await;
+            continue;
         }
         let (idx, start, end, _raced) = match ctx.sched.lease() {
             Lease::Finished => break,
@@ -430,7 +452,9 @@ async fn worker(ctx: Arc<Ctx>, route: usize, wid: usize, client: Client) {
                     let mut t = rs.last_throttle.lock().unwrap();
                     if t.elapsed() > Duration::from_secs(2) {
                         *t = Instant::now();
-                        let _ = rs.allowed.try_update(Ordering::Relaxed, Ordering::Relaxed, |a| Some(a.saturating_sub(1).max(1)));
+                        let now = rs.allowed.load(Ordering::Relaxed).saturating_sub(1).max(1);
+                        rs.allowed.store(now, Ordering::Relaxed);
+                        rs.ceiling.fetch_min(now, Ordering::Relaxed);
                     }
                 }
                 fails += 1;
@@ -564,6 +588,7 @@ fn spawn_ticker(shared: Arc<Shared>, emit: Emit) -> tokio::task::JoinHandle<()> 
                     let b = r.bytes.load(Ordering::Relaxed);
                     route_ema[i] = 0.5 * route_ema[i] + 0.5 * (b.saturating_sub(last_routes[i]) as f64 / secs);
                     last_routes[i] = b;
+                    r.speed.store(route_ema[i].to_bits(), Ordering::Relaxed);
                     RouteStat { name: r.name.clone(), bytes: b, bytes_per_sec: route_ema[i], connections: r.active.load(Ordering::Relaxed) }
                 })
                 .collect();
@@ -599,4 +624,34 @@ fn verify_checksum(opts: &Options, staging: &Path, resume: Option<(&Store, &str)
         }
     }
     res
+}
+
+fn slow_tail(ctx: &Ctx, route: usize) -> bool {
+    let routes = &ctx.shared.routes;
+    if routes.len() < 2 {
+        return false;
+    }
+    let speed = |r: &RouteState| f64::from_bits(r.speed.load(Ordering::Relaxed));
+    let Some((best, best_state)) = routes.iter().map(|r| (speed(r), r)).max_by(|a, b| a.0.total_cmp(&b.0)) else { return false };
+    is_slow_tail(speed(&routes[route]), best, ctx.sched.pending_len(), best_state.allowed.load(Ordering::Relaxed))
+}
+
+/// Every `interval`, let each link's connection count follow its measured speed.
+fn spawn_ramp(shared: Arc<Shared>, max_conns: usize, interval: Duration) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut ramps: Vec<Ramp> = shared.routes.iter().map(|_| Ramp::new(max_conns, true)).collect();
+        loop {
+            tokio::time::sleep(interval).await;
+            for (r, ramp) in shared.routes.iter().zip(ramps.iter_mut()) {
+                ramp.allowed = r.allowed.load(Ordering::Relaxed);
+                // Throttling lowers the ceiling from the worker side.
+                let ceiling = r.ceiling.load(Ordering::Relaxed);
+                if ceiling < ramp.ceiling {
+                    ramp.cap(ceiling);
+                }
+                let n = ramp.step(f64::from_bits(r.speed.load(Ordering::Relaxed)));
+                r.allowed.store(n, Ordering::Relaxed);
+            }
+        }
+    })
 }
