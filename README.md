@@ -1,4 +1,4 @@
-# grabnr
+<p align="center"><img src="assets/brand/readme-banner.svg" alt="grabnr" width="720"></p>
 
 Download faster by using every network connection at once: Wi-Fi, Ethernet, USB or phone tethering.
 Files are split into chunks, and a worker bound to each interface pulls chunks from a shared queue,
