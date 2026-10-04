@@ -1578,6 +1578,7 @@ dependencies = [
 name = "grabnr"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "getrandom 0.4.3",
  "grabnr-core",
  "serde",

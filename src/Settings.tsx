@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { linkColor } from "./format";
+import { ScheduleEditor } from "./ScheduleEditor";
 import type { LinkRule, LinksResponse, Settings as S, SpikeReport } from "./types";
 
 export function SettingsPanel({ settings, apiPort, apiOk, onChange, onClose }: { settings: S; apiPort: number; apiOk: boolean; onChange: (s: S) => void; onClose: () => void }) {
@@ -88,6 +89,20 @@ export function SettingsPanel({ settings, apiPort, apiOk, onChange, onClose }: {
             <span>Simultaneous downloads</span>
             <input type="number" min={1} max={10} value={settings.max_active} onChange={(e) => patch({ max_active: +e.target.value })} />
           </div>
+        </section>
+
+        <section>
+          <h3>Schedule</h3>
+          <ScheduleEditor settings={settings} onChange={onChange} />
+        </section>
+
+        <section>
+          <h3>When all downloads finish</h3>
+          <div className="field">
+            <span>Command to run</span>
+            <input defaultValue={settings.after_command} placeholder="Optional shell command, for example: open ~/Downloads" spellCheck={false} onBlur={(e) => e.target.value !== settings.after_command && patch({ after_command: e.target.value })} />
+          </div>
+          <p className="muted">Pick what happens (sleep, quit or run this command) from the ··· menu in the main window. It applies once and is not remembered after you quit.</p>
         </section>
 
         <section>

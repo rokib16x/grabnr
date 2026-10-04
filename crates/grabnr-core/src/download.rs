@@ -72,6 +72,8 @@ pub struct Options {
     pub max_attempts: u32,
     /// Cap for the whole download in bytes per second.
     pub speed_limit: Option<u64>,
+    /// A limiter shared with other downloads (and adjustable while running); used instead of `speed_limit` when set.
+    pub shared_limit: Option<Arc<Limiter>>,
     /// Verified after the last chunk; a mismatch fails the download and discards the partial file.
     pub checksum: Option<Checksum>,
     /// Start each link with a few connections and add more while that pays off, up to `conns_per_route`.
@@ -107,6 +109,7 @@ impl Options {
             store: None,
             max_attempts: 6,
             speed_limit: None,
+            shared_limit: None,
             checksum: None,
             adaptive: true,
             ramp_interval: Duration::from_secs(2),
@@ -238,7 +241,7 @@ struct Shared {
     global: AtomicU64,
     /// Append-only: a link keeps its index for the whole download, so chunk and stat indices stay valid.
     routes: RwLock<Vec<Arc<RouteState>>>,
-    limit: Option<Limiter>,
+    limit: Option<Arc<Limiter>>,
 }
 
 impl Shared {
@@ -336,7 +339,7 @@ pub async fn download(mut opts: Options, cancel: CancellationToken, emit: Emit) 
         total: probe.total,
         global: AtomicU64::new(0),
         routes: RwLock::new(opts.routes.iter().map(|r| Arc::new(RouteState::new(r, &opts, 0, cancel.child_token()))).collect()),
-        limit: opts.speed_limit.map(Limiter::new),
+        limit: opts.shared_limit.clone().or_else(|| opts.speed_limit.map(|r| Arc::new(Limiter::new(r)))),
     });
 
     let final_path = match (probe.ranges, probe.total) {

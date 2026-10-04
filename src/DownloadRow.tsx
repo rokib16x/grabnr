@@ -48,11 +48,22 @@ export function PlayPause({ item }: { item: Item }) {
   return <button className="round" aria-label={item.status === "error" ? "Retry" : "Resume"} onClick={(e) => { e.stopPropagation(); api.resume(item.id); }}><Icon name="play" /></button>;
 }
 
-export function DownloadRow({ item, live, selected, onSelect }: { item: Item; live?: Live; selected: boolean; onSelect: () => void }) {
+export type DragProps = { onDragStart: () => void; onDragOver: () => void; onDrop: () => void; onDragEnd: () => void; over: boolean };
+
+export function DownloadRow({ item, live, selected, onSelect, drag }: { item: Item; live?: Live; selected: boolean; onSelect: () => void; drag?: DragProps }) {
   const { downloaded, pct, speed } = progressOf(item, live);
   const name = fileName(item.url, item.filename);
   return (
-    <li className={`row ${item.status}${selected ? " selected" : ""}`} onClick={onSelect} onDoubleClick={() => item.status === "done" && api.open(item.id)}>
+    <li
+      className={`row ${item.status}${selected ? " selected" : ""}${drag?.over ? " drop-target" : ""}`}
+      onClick={onSelect}
+      onDoubleClick={() => item.status === "done" && api.open(item.id)}
+      draggable={!!drag}
+      onDragStart={(e) => { if (drag) { e.dataTransfer.setData("application/x-grabnr-row", item.id); e.dataTransfer.effectAllowed = "move"; drag.onDragStart(); } }}
+      onDragOver={(e) => { if (drag) { e.preventDefault(); drag.onDragOver(); } }}
+      onDrop={(e) => { if (drag) { e.preventDefault(); e.stopPropagation(); drag.onDrop(); } }}
+      onDragEnd={() => drag?.onDragEnd()}
+    >
       <FileIcon name={name} />
       <div className="row-body">
         <div className="row-line">

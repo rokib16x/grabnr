@@ -469,3 +469,38 @@ async fn credentials_are_not_sent_to_a_mirror_on_another_host() {
     let leaked: Vec<_> = seen.iter().filter(|(h, auth)| h.starts_with("localhost") && *auth).collect();
     assert!(leaked.is_empty(), "credentials leaked to the mirror host: {leaked:?}");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn downloads_share_one_limiter() {
+    let s = serve(true).await;
+    let limiter = Arc::new(grabnr_core::limiter::Limiter::new(4 * 1024 * 1024));
+    let mk = |n: &str| {
+        let mut o = Options::new(format!("http://127.0.0.1:{}/{n}.bin", s.port), tmp(n), two_routes());
+        o.shared_limit = Some(limiter.clone());
+        o
+    };
+    let t = std::time::Instant::now();
+    let (a, b) =
+        tokio::join!(download(mk("sa"), CancellationToken::new(), silent()), download(mk("sb"), CancellationToken::new(), silent()));
+    assert_eq!(std::fs::read(a.unwrap()).unwrap(), expected(0));
+    assert_eq!(std::fs::read(b.unwrap()).unwrap(), expected(0));
+    // 10 MB through a 4 MB/s budget; two independent limiters would finish in about 1.3 s.
+    assert!(t.elapsed() >= std::time::Duration::from_millis(2000), "finished in {:?}", t.elapsed());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_limit_can_be_lifted_while_downloading() {
+    let s = serve(true).await;
+    let limiter = Arc::new(grabnr_core::limiter::Limiter::new(1024 * 1024)); // 5 MB would take about 5 s
+    let mut o = Options::new(format!("http://127.0.0.1:{}/lift.bin", s.port), tmp("lift"), two_routes());
+    o.shared_limit = Some(limiter.clone());
+    let l = limiter.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        l.set_rate(0);
+    });
+    let t = std::time::Instant::now();
+    let path = download(o, CancellationToken::new(), silent()).await.unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), expected(0));
+    assert!(t.elapsed() < std::time::Duration::from_millis(3000), "still throttled: {:?}", t.elapsed());
+}

@@ -1,7 +1,7 @@
 import { useEffect, useReducer, useState } from "react";
 import { api, subscribe } from "./api";
 import { registerLinks } from "./format";
-import type { AppState, EngineEvent, Item, Link, Live } from "./types";
+import type { AfterAll, AppState, EngineEvent, Item, Link, Live, ScheduleEffect } from "./types";
 
 type State = { items: Item[]; live: Record<string, Live> };
 type Action =
@@ -55,10 +55,14 @@ export function useDownloads() {
   const [state, dispatch] = useReducer(reduce, { items: [], live: {} });
   const [app, setApp] = useState<AppState | null>(null);
   const [links, setLinks] = useState<Link[]>([]);
+  const [schedule, setSchedule] = useState<ScheduleEffect>({ hold: false, limit_kbps: 0, rule: null });
+  const [afterAll, setAfterAll] = useState<AfterAll>("none");
 
   useEffect(() => {
     api.state().then((s) => {
       setApp(s);
+      setSchedule(s.schedule);
+      setAfterAll(s.after_all);
       dispatch({ t: "init", items: s.downloads });
     });
     api.links().then((r) => {
@@ -69,6 +73,8 @@ export function useDownloads() {
       item: (item) => dispatch({ t: "item", item }),
       removed: (id) => dispatch({ t: "removed", id }),
       event: (id, e) => dispatch({ t: "event", id, e }),
+      schedule: setSchedule,
+      afterAll: setAfterAll,
     });
   }, []);
 
@@ -77,5 +83,5 @@ export function useDownloads() {
   const linkSpeeds = new Map<string, number>();
   active.forEach((i) => state.live[i.id]?.routes.forEach((r) => linkSpeeds.set(r.name, (linkSpeeds.get(r.name) ?? 0) + r.bytes_per_sec)));
 
-  return { ...state, app, setApp, links, active, speed, linkSpeeds };
+  return { ...state, app, setApp, links, active, speed, linkSpeeds, schedule, afterAll, setAfterAll };
 }

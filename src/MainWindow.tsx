@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, onOpenSettings } from "./api";
 import { AddDialog } from "./AddDialog";
 import { CommandPalette, type Command } from "./CommandPalette";
-import { DownloadRow, progressOf } from "./DownloadRow";
+import { DownloadRow, progressOf, type DragProps } from "./DownloadRow";
 import { fileName } from "./format";
 import { HistoryView } from "./HistoryView";
 import { Icon } from "./icons";
@@ -12,10 +12,11 @@ import { Onboarding } from "./Onboarding";
 import { SettingsPanel } from "./Settings";
 import { filterTitle, matchFilter, Sidebar, type Filter } from "./Sidebar";
 import { useDownloads } from "./store";
-import type { Item, Live, Settings } from "./types";
+import type { AfterAll, Item, Live, Settings } from "./types";
 
-type Sort = "newest" | "oldest" | "name" | "size" | "progress";
+type Sort = "queue" | "newest" | "oldest" | "name" | "size" | "progress";
 const SORTS: { id: Sort; label: string }[] = [
+  { id: "queue", label: "Queue order (drag to reorder)" },
   { id: "newest", label: "Newest first" },
   { id: "oldest", label: "Oldest first" },
   { id: "name", label: "Name" },
@@ -23,10 +24,11 @@ const SORTS: { id: Sort; label: string }[] = [
   { id: "progress", label: "Progress" },
 ];
 
-function sorter(sort: Sort, live: Record<string, Live>) {
+function sorter(sort: Sort, live: Record<string, Live>, order: Map<string, number>) {
   const name = (i: Item) => fileName(i.url, i.filename).toLowerCase();
   const pct = (i: Item) => progressOf(i, live[i.id]).pct;
   switch (sort) {
+    case "queue": return (a: Item, b: Item) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0);
     case "oldest": return (a: Item, b: Item) => a.added - b.added;
     case "name": return (a: Item, b: Item) => name(a).localeCompare(name(b));
     case "size": return (a: Item, b: Item) => (b.total ?? 0) - (a.total ?? 0);
@@ -65,6 +67,8 @@ export function MainWindow() {
   const [dropping, setDropping] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [skipOnboarding, setSkipOnboarding] = useState(false);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
 
   useEffect(() => onOpenSettings(() => setSettingsOpen(true)), []);
   useEffect(() => { try { localStorage.setItem("grabnr.sort", sort); } catch { /* storage may be unavailable */ } }, [sort]);
@@ -127,10 +131,33 @@ export function MainWindow() {
 
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
+    // The order the downloader uses: highest priority first, then oldest. Items are stored newest first.
+    const order = new Map([...d.items].reverse().sort((a, b) => b.priority - a.priority).map((i, n) => [i.id, n]));
     return d.items
       .filter((i) => matchFilter(filter, i) && (!q || fileName(i.url, i.filename).toLowerCase().includes(q) || i.url.toLowerCase().includes(q)))
-      .sort(sorter(sort, d.live));
+      .sort(sorter(sort, d.live, order));
   }, [d.items, d.live, filter, query, sort]);
+  const canDrag = sort === "queue" && !query.trim();
+  const dragFor = (i: Item): DragProps | undefined =>
+    canDrag && i.status !== "done"
+      ? {
+          over: overId === i.id && dragId !== i.id,
+          onDragStart: () => setDragId(i.id),
+          onDragOver: () => setOverId(i.id),
+          onDrop: () => {
+            if (dragId) void api.reorder(dragId, i.id);
+            setDragId(null);
+            setOverId(null);
+          },
+          onDragEnd: () => { setDragId(null); setOverId(null); },
+        }
+      : undefined;
+  const AFTER: { id: AfterAll; label: string }[] = [
+    { id: "none", label: "Do nothing" },
+    { id: "sleep", label: "Put the Mac to sleep" },
+    { id: "quit", label: "Quit grabnr" },
+    ...(d.app?.settings.after_command.trim() ? [{ id: "command" as AfterAll, label: "Run my command" }] : []),
+  ];
 
   // Keep something selected so the inspector is never blank while there are downloads.
   const current = d.items.find((i) => i.id === selected) ?? shown.find((i) => i.status === "downloading") ?? shown[0];
@@ -158,6 +185,22 @@ export function MainWindow() {
           <div className="title" data-tauri-drag-region>
             <h1>{filterTitle(filter)}</h1>
             <p>{d.items.length} {d.items.length === 1 ? "item" : "items"}{d.active.length ? ` · ${d.active.length} downloading` : ""}</p>
+            {(d.schedule.rule || d.afterAll !== "none") && (
+              <div className="chips">
+                {d.schedule.rule && (
+                  <span className="chip warn" title="Set in Preferences, under Schedule">
+                    <Icon name="clock" size={12} />
+                    {d.schedule.hold ? `Held by schedule: ${d.schedule.rule}` : d.schedule.limit_kbps ? `${d.schedule.rule}: limited to ${(d.schedule.limit_kbps / 1024).toFixed(1)} MB/s` : `${d.schedule.rule}: full speed`}
+                  </span>
+                )}
+                {d.afterAll !== "none" && (
+                  <span className="chip">
+                    When finished: {AFTER.find((a) => a.id === d.afterAll)?.label ?? d.afterAll}
+                    <button className="chip-x" aria-label="Cancel the when-finished action" onClick={() => void api.setAfterAll("none")}><Icon name="x" size={11} /></button>
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           <div className="tools">
             <button className="round" aria-label="Add download" title="Add download (⌘N)" onClick={() => setAdding(true)}><Icon name="plus" /></button>
@@ -168,6 +211,8 @@ export function MainWindow() {
               items={[
                 { label: "Add Download…", onClick: () => setAdding(true) },
                 { label: "Command Palette…", onClick: () => setPalette(true) },
+                "sep",
+                ...AFTER.map((a) => ({ label: `${d.afterAll === a.id ? "✓ " : "    "}When finished: ${a.label}`, onClick: () => void api.setAfterAll(a.id) })),
                 "sep",
                 ...SORTS.map((s) => ({ label: `${sort === s.id ? "✓ " : "    "}Sort by ${s.label}`, onClick: () => setSort(s.id) })),
                 "sep",
@@ -198,7 +243,7 @@ export function MainWindow() {
               ) : (
                 <ul className="list">
                   {shown.map((i) => (
-                    <DownloadRow key={i.id} item={i} live={d.live[i.id]} selected={current?.id === i.id} onSelect={() => setSelected(i.id)} />
+                    <DownloadRow key={i.id} item={i} live={d.live[i.id]} selected={current?.id === i.id} onSelect={() => setSelected(i.id)} drag={dragFor(i)} />
                   ))}
                 </ul>
               )}

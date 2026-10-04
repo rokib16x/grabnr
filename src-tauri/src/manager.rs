@@ -1,18 +1,20 @@
 //! Owns the download list: persistence, queueing, pause/resume, and forwarding
 //! engine events to the UI. Shared by the Tauri commands and the browser-extension API.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use grabnr_core::{interfaces::LinkKind, list_links, Event, Options, Route, Store};
+use grabnr_core::{interfaces::LinkKind, limiter::Limiter, list_links, Event, Options, Route, Store};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager as _};
 use tauri_plugin_notification::NotificationExt;
 use tokio_util::sync::CancellationToken;
 
 use crate::history::{self, HistoryRec, Stats};
+use crate::queue::{self, Entry};
+use crate::schedule::{self, Effect, Rule};
 
 pub const API_PORT: u16 = 17653;
 
@@ -126,6 +128,23 @@ pub struct Settings {
     /// Play the system sound with the "download complete" notification.
     #[serde(default = "yes")]
     pub sound: bool,
+    /// Time-of-day rules (pause, cap the speed, or lift the cap).
+    #[serde(default)]
+    pub schedule: Vec<Rule>,
+    /// Shell command for the "run a command when downloads finish" action.
+    #[serde(default)]
+    pub after_command: String,
+}
+
+/// What to do once the queue has finished. Never saved: a forgotten "sleep" must not surprise the next session.
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AfterAll {
+    #[default]
+    None,
+    Sleep,
+    Quit,
+    Command,
 }
 
 fn yes() -> bool {
@@ -163,6 +182,8 @@ pub struct SettingsPatch {
     pub proxy: Option<String>,
     pub onboarded: Option<bool>,
     pub sound: Option<bool>,
+    pub schedule: Option<Vec<Rule>>,
+    pub after_command: Option<String>,
 }
 
 pub struct AddRequest {
@@ -187,6 +208,11 @@ struct Inner {
     retry_at: HashMap<String, Instant>,
     /// The current run of each running download (engine byte counters restart every run).
     runs: HashMap<String, Run>,
+    /// The schedule is holding downloads back.
+    hold: bool,
+    /// Downloads stopped by the schedule, to be queued again rather than shown as paused.
+    held: HashSet<String>,
+    after_all: AfterAll,
 }
 
 struct Run {
@@ -201,6 +227,9 @@ pub struct Manager {
     inner: Mutex<Inner>,
     pairing_until: Mutex<Option<Instant>>,
     history: Mutex<Vec<HistoryRec>>,
+    /// One speed limit shared by every download; the schedule and settings change it while they run.
+    limiter: Arc<Limiter>,
+    effect: Mutex<Effect>,
     pub api_ok: Mutex<bool>,
 }
 
@@ -247,6 +276,8 @@ impl Manager {
                 proxy: String::new(),
                 onboarded: false,
                 sound: true,
+                schedule: Vec::new(),
+                after_command: String::new(),
             });
         let mut items: Vec<Item> =
             std::fs::read(data_dir.join("downloads.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
@@ -270,12 +301,18 @@ impl Manager {
                 speeds: HashMap::new(),
                 retry_at: HashMap::new(),
                 runs: HashMap::new(),
+                hold: false,
+                held: HashSet::new(),
+                after_all: AfterAll::None,
             }),
             pairing_until: Mutex::new(None),
             history: Mutex::new(history),
+            limiter: Arc::new(Limiter::new(0)),
+            effect: Mutex::new(Effect::default()),
             api_ok: Mutex::new(false),
         });
         m.persist();
+        m.apply_schedule_now();
         Ok(m)
     }
 
@@ -297,7 +334,7 @@ impl Manager {
         self.inner.lock().unwrap().settings.clone()
     }
 
-    pub fn set_settings(&self, p: SettingsPatch) {
+    pub fn set_settings(self: &Arc<Self>, p: SettingsPatch) {
         {
             let mut g = self.inner.lock().unwrap();
             if let Some(v) = p.dest_dir {
@@ -336,8 +373,15 @@ impl Manager {
             if let Some(v) = p.sound {
                 g.settings.sound = v;
             }
+            if let Some(v) = p.schedule {
+                g.settings.schedule = v;
+            }
+            if let Some(v) = p.after_command {
+                g.settings.after_command = v;
+            }
         }
         self.persist();
+        self.apply_schedule_now();
     }
 
     pub fn token_ok(&self, t: &str) -> bool {
@@ -528,7 +572,7 @@ impl Manager {
             let next = {
                 let g = self.inner.lock().unwrap();
                 let active = g.cancels.len();
-                if active >= g.settings.max_active {
+                if g.hold || active >= g.settings.max_active {
                     None
                 } else {
                     pick_next(&g.items, &g.cancels, &g.retry_at, Instant::now())
@@ -574,12 +618,12 @@ impl Manager {
     }
 
     fn start(self: &Arc<Self>, item: Item) {
-        let (conns, limit, global_proxy, cancel) = {
+        let (conns, global_proxy, cancel) = {
             let mut g = self.inner.lock().unwrap();
             let c = CancellationToken::new();
             g.cancels.insert(item.id.clone(), c.clone());
             g.runs.insert(item.id.clone(), Run { started: Instant::now(), seen: HashMap::new() });
-            (g.settings.conns_per_route, g.settings.speed_limit_kbps, g.settings.proxy.clone(), c)
+            (g.settings.conns_per_route, g.settings.proxy.clone(), c)
         };
         self.set_status(&item.id, Status::Downloading, None);
 
@@ -591,7 +635,7 @@ impl Manager {
         // Links that come and go (cable plugged in, Wi-Fi back after sleep) join or leave this download.
         let watcher = self.clone();
         opts.link_watch = Some(Arc::new(move || watcher.link_routes()));
-        opts.speed_limit = (limit > 0).then(|| limit * 1024);
+        opts.shared_limit = Some(self.limiter.clone());
         opts.mirrors = item.mirrors.clone();
         opts.proxy = item.proxy.clone().or_else(|| Some(global_proxy).filter(|p| !p.is_empty()));
         if let Some(c) = &item.checksum {
@@ -668,6 +712,128 @@ impl Manager {
         Some(delay)
     }
 
+    /// Apply the schedule and general limit for the current local time.
+    pub fn apply_schedule_now(self: &Arc<Self>) {
+        use chrono::{Datelike, Local, Timelike};
+        let now = Local::now();
+        self.apply_schedule(now.weekday().num_days_from_monday() as usize, (now.hour() * 60 + now.minute()) as u16);
+    }
+
+    fn apply_schedule(self: &Arc<Self>, weekday: usize, minute: u16) {
+        let (effect, entering_hold, leaving_hold) = {
+            let mut g = self.inner.lock().unwrap();
+            let e = schedule::effect(&g.settings.schedule, g.settings.speed_limit_kbps, weekday, minute);
+            let entering = e.hold && !g.hold;
+            let leaving = !e.hold && g.hold;
+            g.hold = e.hold;
+            if entering {
+                // Stop what is running; each one goes back to the queue instead of showing as paused.
+                let running: Vec<String> = g.cancels.keys().cloned().collect();
+                for id in running {
+                    if let Some(c) = g.cancels.get(&id) {
+                        c.cancel();
+                    }
+                    g.held.insert(id);
+                }
+            }
+            (e, entering, leaving)
+        };
+        self.limiter.set_rate(effect.limit_kbps * 1024);
+        let changed = {
+            let mut cur = self.effect.lock().unwrap();
+            let changed = *cur != effect;
+            *cur = effect.clone();
+            changed
+        };
+        if changed || entering_hold || leaving_hold {
+            let _ = self.app.emit("schedule-changed", &effect);
+        }
+        if leaving_hold {
+            self.pump();
+        }
+    }
+
+    pub fn schedule_effect(&self) -> Effect {
+        self.effect.lock().unwrap().clone()
+    }
+
+    pub fn after_all(&self) -> AfterAll {
+        self.inner.lock().unwrap().after_all
+    }
+
+    pub fn set_after_all(&self, a: AfterAll) {
+        self.inner.lock().unwrap().after_all = a;
+        let _ = self.app.emit("after-all-changed", a);
+    }
+
+    /// When the last waiting or running download has finished, carry out the chosen action after a short delay
+    /// (so it can still be cancelled), then forget it.
+    fn maybe_run_after_all(self: &Arc<Self>) {
+        let (action, command) = {
+            let g = self.inner.lock().unwrap();
+            let busy = g.items.iter().any(|i| matches!(i.status, Status::Queued | Status::Downloading));
+            if busy || g.hold || g.after_all == AfterAll::None {
+                return;
+            }
+            (g.after_all, g.settings.after_command.clone())
+        };
+        let _ = self
+            .app
+            .notification()
+            .builder()
+            .title("All downloads finished")
+            .body("grabnr will carry out your \"when finished\" action in 10 seconds.")
+            .show();
+        let me = self.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            {
+                let mut g = me.inner.lock().unwrap();
+                let still = g.after_all == action && !g.items.iter().any(|i| matches!(i.status, Status::Queued | Status::Downloading));
+                if !still {
+                    return; // cancelled, or something new started
+                }
+                g.after_all = AfterAll::None;
+            }
+            let _ = me.app.emit("after-all-changed", AfterAll::None);
+            match action {
+                AfterAll::Quit => me.app.exit(0),
+                AfterAll::Sleep => {
+                    #[cfg(target_os = "macos")]
+                    let _ = std::process::Command::new("pmset").arg("sleepnow").spawn();
+                }
+                AfterAll::Command if !command.trim().is_empty() => {
+                    let _ = std::process::Command::new("/bin/sh").arg("-c").arg(&command).env("GRABNR_EVENT", "queue-finished").spawn();
+                }
+                _ => {}
+            }
+        });
+    }
+
+    /// Put `id` in front of `before` in the queue (or last when `None`), as dragged in the list.
+    pub fn reorder(&self, id: &str, before: Option<&str>) {
+        let changed: Vec<String> = {
+            let mut g = self.inner.lock().unwrap();
+            let entries: Vec<Entry> =
+                g.items.iter().enumerate().map(|(age, i)| Entry { id: i.id.clone(), priority: i.priority, age }).collect();
+            let ordered = queue::move_before(queue::order(&entries), id, before);
+            let mut changed = Vec::new();
+            for (pid, p) in queue::priorities(&ordered) {
+                if let Some(it) = g.items.iter_mut().find(|i| i.id == pid) {
+                    if it.priority != p {
+                        it.priority = p;
+                        changed.push(pid);
+                    }
+                }
+            }
+            changed
+        };
+        self.persist();
+        for id in changed {
+            self.emit_item(&id);
+        }
+    }
+
     fn add_history(&self, id: &str) {
         let rec = {
             let g = self.inner.lock().unwrap();
@@ -725,8 +891,10 @@ impl Manager {
                     i.stats.active_secs += secs;
                 }
             }
-            g.removing.iter().position(|r| r == id).map(|p| g.removing.remove(p)).is_some()
+            let held = g.held.remove(id);
+            (g.removing.iter().position(|r| r == id).map(|p| g.removing.remove(p)).is_some(), held)
         };
+        let (removed, held) = removed;
         if !removed {
             match res {
                 Ok(path) => {
@@ -744,6 +912,7 @@ impl Manager {
                     }
                     self.set_status(id, Status::Done, None);
                     self.add_history(id);
+                    self.maybe_run_after_all();
                     let sound = self.inner.lock().unwrap().settings.sound;
                     let mut note = self.app.notification().builder().title("Download complete").body(name);
                     if sound {
@@ -751,7 +920,8 @@ impl Manager {
                     }
                     let _ = note.show();
                 }
-                Err(grabnr_core::Error::Cancelled) => self.set_status(id, Status::Paused, None),
+                // Stopped by the schedule: wait in the queue, and start again when the window ends.
+                Err(grabnr_core::Error::Cancelled) => self.set_status(id, if held { Status::Queued } else { Status::Paused }, None),
                 Err(e) => {
                     let msg = e.to_string();
                     if let Some(delay) = self.schedule_retry(id, &e, &msg) {

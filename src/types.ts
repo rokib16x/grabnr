@@ -49,9 +49,16 @@ export type Settings = {
   proxy: string;
   onboarded: boolean;
   sound: boolean;
+  schedule: ScheduleRule[];
+  after_command: string;
 };
 
-export type AppState = { downloads: Item[]; settings: Settings; api_port: number; api_ok: boolean };
+export type ScheduleMode = { kind: "pause" } | { kind: "limit"; kbps: number } | { kind: "full" };
+export type ScheduleRule = { id: string; name: string; enabled: boolean; days: boolean[]; start: number; end: number; mode: ScheduleMode };
+export type ScheduleEffect = { hold: boolean; limit_kbps: number; rule: string | null };
+export type AfterAll = "none" | "sleep" | "quit" | "command";
+
+export type AppState = { downloads: Item[]; settings: Settings; api_port: number; api_ok: boolean; schedule: ScheduleEffect; after_all: AfterAll };
 
 export type Link = {
   name: string;

@@ -43,13 +43,13 @@ Anything marked built has not yet been proven on two real links with different g
 - [x] Disk-space check before starting; partial-file cleanup on delete
 
 ## 4. Queue and scheduling
-- [x] Concurrent download limit, "Download next / last" priority
+- [x] Concurrent download limit, "Download next / last" priority, drag-to-reorder in queue order
 - [x] Overall and per-link speed limits
 - [x] Automatic retry of failed downloads, with growing delays
 - [x] Duplicate detection
-- [ ] Drag-to-reorder
-- [ ] Time-of-day scheduler and bandwidth profiles
-- [ ] On-complete actions (quit, sleep, run a script)
+- [x] Time-of-day schedule: hold downloads, cap the speed or lift the cap by day and hour, including overnight windows
+- [x] One speed limit shared by all downloads, adjustable while they run
+- [~] When all downloads finish: sleep, quit or run a command (no shut down)
 
 ## 5. User interface
 - [x] macOS-style window: sidebar, download list, inspector, translucent sidebar, light and dark

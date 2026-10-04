@@ -1,6 +1,8 @@
 mod api;
 mod history;
 mod manager;
+mod queue;
+mod schedule;
 
 use std::sync::Arc;
 
@@ -48,6 +50,8 @@ struct AppState {
     settings: Settings,
     api_port: u16,
     api_ok: bool,
+    schedule: schedule::Effect,
+    after_all: manager::AfterAll,
 }
 
 #[tauri::command]
@@ -59,7 +63,14 @@ fn get_links() -> LinksResponse {
 
 #[tauri::command]
 fn get_state(m: Mgr) -> AppState {
-    AppState { downloads: m.list(), settings: m.settings(), api_port: manager::API_PORT, api_ok: *m.api_ok.lock().unwrap() }
+    AppState {
+        downloads: m.list(),
+        settings: m.settings(),
+        api_port: manager::API_PORT,
+        api_ok: *m.api_ok.lock().unwrap(),
+        schedule: m.schedule_effect(),
+        after_all: m.after_all(),
+    }
 }
 
 /// Turn the form's extras into an `AddRequest` for one URL.
@@ -179,6 +190,16 @@ fn clear_history(m: Mgr) {
 #[tauri::command]
 fn export_history(m: Mgr, path: String) -> Result<(), String> {
     std::fs::write(path, m.history_csv()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn reorder_download(m: Mgr, id: String, before: Option<String>) {
+    m.reorder(&id, before.as_deref());
+}
+
+#[tauri::command]
+fn set_after_all(m: Mgr, action: manager::AfterAll) {
+    m.set_after_all(action);
 }
 
 #[tauri::command]
@@ -399,6 +420,15 @@ pub fn run() {
             let m = Manager::load(app.handle().clone())?;
             api::spawn(m.clone());
             build_tray(app.handle(), m.clone())?;
+            // Re-evaluate the schedule every 20 seconds (it is minute resolution).
+            let sched = m.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut tick = tokio::time::interval(std::time::Duration::from_secs(20));
+                loop {
+                    tick.tick().await;
+                    sched.apply_schedule_now();
+                }
+            });
             app.manage(m);
             // Started by the login item: stay in the menu bar until the user opens the window.
             if std::env::args().any(|a| a == "--hidden") {
@@ -431,6 +461,8 @@ pub fn run() {
             get_history,
             clear_history,
             export_history,
+            reorder_download,
+            set_after_all,
             move_download,
             pause_download,
             resume_download,

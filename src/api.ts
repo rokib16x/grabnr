@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { mock } from "./mock";
-import type { AddOptions, AddResult, BatchResult, HistoryRec, PageLink, AppState, EngineEvent, Item, LinksResponse, Settings, SpikeReport } from "./types";
+import type { AddOptions, AddResult, AfterAll, ScheduleEffect, BatchResult, HistoryRec, PageLink, AppState, EngineEvent, Item, LinksResponse, Settings, SpikeReport } from "./types";
 
 const native = "__TAURI_INTERNALS__" in window;
 const call = <T,>(cmd: string, args?: Record<string, unknown>) => (native ? invoke<T>(cmd, args) : (mock.call(cmd, args) as Promise<T>));
@@ -24,6 +24,8 @@ export const api = {
     if (path) await call<void>("export_history", { path });
     return path;
   },
+  reorder: (id: string, before: string | null) => call<void>("reorder_download", { id, before }),
+  setAfterAll: (action: AfterAll) => call<void>("set_after_all", { action }),
   move: (id: string, toFront: boolean) => call<void>("move_download", { id, toFront }),
   pause: (id: string) => call<void>("pause_download", { id }),
   resume: (id: string) => call<void>("resume_download", { id }),
@@ -38,7 +40,13 @@ export const api = {
   pickFolder: async () => (native ? ((await open({ directory: true })) as string | null) : "/Users/you/Documents"),
 };
 
-type Handlers = { item: (i: Item) => void; removed: (id: string) => void; event: (id: string, e: EngineEvent) => void };
+type Handlers = {
+  item: (i: Item) => void;
+  removed: (id: string) => void;
+  event: (id: string, e: EngineEvent) => void;
+  schedule?: (e: ScheduleEffect) => void;
+  afterAll?: (a: AfterAll) => void;
+};
 
 /** Called when the menu bar popover asks the main window to open Preferences. */
 export function onOpenSettings(cb: () => void): () => void {
@@ -54,6 +62,8 @@ export function subscribe(h: Handlers): () => void {
     listen<Item>("item-updated", (e) => h.item(e.payload)),
     listen<string>("item-removed", (e) => h.removed(e.payload)),
     listen<{ id: string; event: EngineEvent }>("download-event", (e) => h.event(e.payload.id, e.payload.event)),
+    listen<ScheduleEffect>("schedule-changed", (e) => h.schedule?.(e.payload)),
+    listen<AfterAll>("after-all-changed", (e) => h.afterAll?.(e.payload)),
   ];
   return () => subs.forEach((p) => p.then((un) => un()));
 }

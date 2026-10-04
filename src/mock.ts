@@ -5,7 +5,7 @@ type Handlers = { item: (i: Item) => void; removed: (id: string) => void; event:
 
 let handlers: Handlers | null = null;
 const items: Item[] = [];
-const settings: Settings = { dest_dir: "/Users/you/Downloads", enabled_links: null, conns_per_route: 8, max_active: 3, speed_limit_kbps: 0, auto_retry: 3, link_rules: {}, skip_cellular: false, proxy: "", onboarded: false, sound: true, token: "d3adbeefcafe0123456789abcdef0123456789abcd" };
+const settings: Settings = { dest_dir: "/Users/you/Downloads", enabled_links: null, conns_per_route: 8, max_active: 3, speed_limit_kbps: 0, auto_retry: 3, link_rules: {}, skip_cellular: false, proxy: "", onboarded: false, sound: true, schedule: [], after_command: "", token: "d3adbeefcafe0123456789abcdef0123456789abcd" };
 const timers = new Map<string, number>();
 let autostart = false;
 
@@ -68,7 +68,7 @@ export const mock = {
           const bad = seed("backup.zip", 400e6, "error", 0);
           bad.error = "HTTP 404 Not Found";
         }
-        return { downloads: items, settings, api_port: 17653, api_ok: true } satisfies AppState;
+        return { downloads: items, settings, api_port: 17653, api_ok: true, schedule: { hold: false, limit_kbps: 0, rule: null }, after_all: "none" } satisfies AppState;
       }
       case "get_links":
         return {
@@ -107,6 +107,17 @@ export const mock = {
       }
       case "clear_history": return;
       case "export_history": return;
+      case "reorder_download": {
+        const queue = [...items].reverse().sort((a, b) => b.priority - a.priority);
+        const from = queue.findIndex((i) => i.id === args.id);
+        if (from < 0) return;
+        const [it] = queue.splice(from, 1);
+        const at = args.before ? queue.findIndex((i) => i.id === args.before) : -1;
+        queue.splice(at < 0 ? queue.length : at, 0, it);
+        queue.forEach((q, i) => { q.priority = queue.length - i; handlers?.item({ ...q }); });
+        return;
+      }
+      case "set_after_all": return;
       case "move_download": { const it = items.find((i) => i.id === args.id); if (it) { it.priority += args.toFront ? 1 : -1; handlers?.item({ ...it }); } return; }
       case "pause_download": { const it = items.find((i) => i.id === args.id); if (it) { clearInterval(timers.get(it.id)); it.status = "paused"; handlers?.item({ ...it }); } return; }
       case "resume_download": { const it = items.find((i) => i.id === args.id); if (it) run(it); return; }
