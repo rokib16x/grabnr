@@ -1,0 +1,50 @@
+{
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "grabnr",
+        "width": 1080,
+        "height": 700,
+        "minWidth": 760,
+        "minHeight": 480,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "transparent": true,
+        "trafficLightPosition": {
+          "x": 20,
+          "y": 22
+        },
+        "windowEffects": {
+          "effects": [
+            "sidebar"
+          ],
+          "state": "followsWindowActiveState"
+        },
+        "dragDropEnabled": false
+      },
+      {
+        "label": "tray",
+        "title": "grabnr",
+        "url": "index.html?view=tray",
+        "width": 340,
+        "height": 420,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": true,
+        "windowEffects": {
+          "effects": [
+            "popover"
+          ],
+          "state": "active",
+          "radius": 12
+        }
+      }
+    ],
+    "macOSPrivateApi": true
+  }
+}

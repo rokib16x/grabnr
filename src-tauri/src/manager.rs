@@ -1024,11 +1024,10 @@ impl Manager {
             match action {
                 AfterAll::Quit => me.app.exit(0),
                 AfterAll::Sleep => {
-                    #[cfg(target_os = "macos")]
-                    let _ = std::process::Command::new("pmset").arg("sleepnow").spawn();
+                    let _ = sleep_command().spawn();
                 }
                 AfterAll::Command if !command.trim().is_empty() => {
-                    let _ = std::process::Command::new("/bin/sh").arg("-c").arg(&command).env("GRABNR_EVENT", "queue-finished").spawn();
+                    let _ = shell_command(&command).env("GRABNR_EVENT", "queue-finished").spawn();
                 }
                 _ => {}
             }
@@ -1210,11 +1209,50 @@ fn split_url(u: &str) -> Option<(String, String)> {
     Some((u.host_str()?.to_ascii_lowercase(), u.path().to_string()))
 }
 
+/// The command that puts this computer to sleep.
+fn sleep_command() -> std::process::Command {
+    #[cfg(target_os = "macos")]
+    {
+        let mut c = std::process::Command::new("pmset");
+        c.arg("sleepnow");
+        c
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let mut c = std::process::Command::new("rundll32.exe");
+        c.args(["powrprof.dll,SetSuspendState", "0,1,0"]);
+        c
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let mut c = std::process::Command::new("systemctl");
+        c.arg("suspend");
+        c
+    }
+}
+
+/// A command line run through the system shell.
+fn shell_command(line: &str) -> std::process::Command {
+    #[cfg(windows)]
+    {
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/C", line]);
+        c
+    }
+    #[cfg(not(windows))]
+    {
+        let mut c = std::process::Command::new("/bin/sh");
+        c.args(["-c", line]);
+        c
+    }
+}
+
 /// ffmpeg, if installed: on the PATH or in the usual Homebrew locations (an app started from the Dock has a short PATH).
 pub fn find_ffmpeg() -> Option<PathBuf> {
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
     dirs.extend(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].map(PathBuf::from));
-    dirs.into_iter().map(|d| d.join("ffmpeg")).find(|p| p.is_file())
+    let exe = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+    dirs.into_iter().map(|d| d.join(exe)).find(|p| p.is_file())
 }
 
 #[cfg(test)]

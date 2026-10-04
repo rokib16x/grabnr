@@ -2,6 +2,7 @@ mod api;
 mod deeplink;
 mod history;
 mod manager;
+mod popover;
 mod portable;
 mod quarantine;
 mod queue;
@@ -28,6 +29,8 @@ type Mgr<'a> = State<'a, Arc<Manager>>;
 struct LinksResponse {
     links: Vec<Link>,
     shared_gateways: Vec<(String, String)>,
+    /// `interface` or `source_address`: how firmly this system keeps a download on its link.
+    binding: grabnr_core::Strength,
 }
 
 /// Optional extras for one download. Credentials are stored with the download and never sent back to the UI.
@@ -66,7 +69,7 @@ struct AppState {
 fn get_links() -> LinksResponse {
     let links = list_links();
     let shared_gateways = shared_gateways(&links);
-    LinksResponse { links, shared_gateways }
+    LinksResponse { links, shared_gateways, binding: grabnr_core::bind_strength() }
 }
 
 #[tauri::command]
@@ -401,13 +404,16 @@ fn toggle_popover(app: &tauri::AppHandle, icon: tauri::Rect) {
     let scale = w.scale_factor().unwrap_or(1.0);
     let pos = icon.position.to_physical::<f64>(scale);
     let size = icon.size.to_physical::<f64>(scale);
-    let width = w.outer_size().map(|s| s.width as f64).unwrap_or(340.0 * scale);
-    let mut x = pos.x + size.width / 2.0 - width / 2.0;
-    if let Ok(Some(mon)) = app.monitor_from_point(pos.x, pos.y) {
-        let (left, right) = (mon.position().x as f64, mon.position().x as f64 + mon.size().width as f64);
-        x = x.clamp(left + 8.0 * scale, right - width - 8.0 * scale);
-    }
-    let _ = w.set_position(tauri::PhysicalPosition::new(x, pos.y + size.height + 6.0 * scale));
+    let win = w.outer_size().map(|s| (s.width as f64, s.height as f64)).unwrap_or((340.0 * scale, 420.0 * scale));
+    // The screen the icon is on; fall back to a huge one so only the icon decides.
+    let screen = app
+        .monitor_from_point(pos.x, pos.y)
+        .ok()
+        .flatten()
+        .map(|m| popover::Rect { x: m.position().x as f64, y: m.position().y as f64, w: m.size().width as f64, h: m.size().height as f64 })
+        .unwrap_or(popover::Rect { x: -1e6, y: -1e6, w: 2e6, h: 2e6 });
+    let (x, y) = popover::position(popover::Rect { x: pos.x, y: pos.y, w: size.width, h: size.height }, win, screen, 6.0 * scale);
+    let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
     let _ = w.show();
     let _ = w.set_focus();
 }
@@ -450,7 +456,9 @@ fn build_tray(app: &tauri::AppHandle, m: Arc<Manager>) -> tauri::Result<()> {
         .icon_as_template(true)
         .tooltip("grabnr")
         .menu(&menu)
-        .show_menu_on_left_click(false)
+        // Linux trays (AppIndicator) report no clicks at all, so there the menu is the interface; elsewhere a left click
+        // opens the popover and the menu stays on right click.
+        .show_menu_on_left_click(cfg!(target_os = "linux"))
         .on_tray_icon_event(|tray, ev| {
             if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, rect, .. } = ev {
                 toggle_popover(tray.app_handle(), rect);
@@ -516,6 +524,9 @@ async fn run_spike(only: Vec<String>, secs: u64) -> Result<spike::SpikeReport, S
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // A second launch (or a grabnr:// link on Windows/Linux) hands over to the running copy instead of starting another,
+        // which would fight over the extension's port.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())

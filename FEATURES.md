@@ -98,4 +98,4 @@ Anything marked built has not yet been proven on two real links with different g
 
 ## 10. Platforms
 - [x] macOS (Apple silicon and Intel)
-- [~] Linux and Windows: the engine builds in CI; interface binding is only proven on macOS
+- [~] Linux and Windows: the app builds, passes clippy (Linux) and its tests in CI and is packaged by the release workflow; interface binding and the UI have not been run on real Linux or Windows machines

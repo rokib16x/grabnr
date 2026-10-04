@@ -3,6 +3,7 @@ import { api } from "./api";
 import { linkColor } from "./format";
 import { Icon, linkIcon } from "./icons";
 import type { AppState, LinksResponse } from "./types";
+import { MOD, TRAY } from "./platform";
 
 /** First-run setup: what grabnr does, whether your connections are ready, and how to connect the browser. */
 export function Onboarding({ app, onDone }: { app: AppState; onDone: () => void }) {
@@ -35,6 +36,7 @@ export function Onboarding({ app, onDone }: { app: AppState; onDone: () => void 
           <li key={l.name}><i className="tile" style={{ background: linkColor(l.name) }}><Icon name={linkIcon(l.kind)} size={14} /></i>{l.label}<small>{l.ipv4}</small></li>
         ))}
       </ul>
+      {links?.binding === "source_address" && <p className="check warn"><Icon name="alert" />This system steers each download to a connection by its address, which works when every connection has its own router. Use Test links in Manage Connections to confirm.</p>}
       {shared.map(([a, b]) => <p key={a + b} className="check warn"><Icon name="alert" />{a} and {b} go through the same router, so using both will not add speed.</p>)}
       <p className="muted small">You can turn connections on or off, or limit them, in Manage Connections.</p>
     </>,
@@ -44,8 +46,8 @@ export function Onboarding({ app, onDone }: { app: AppState; onDone: () => void 
       <p className={`check ${app.api_ok ? "ok" : "bad"}`}><Icon name={app.api_ok ? "check" : "alert"} />{app.api_ok ? `Ready for the extension on port ${app.api_port}.` : `Port ${app.api_port} is used by another program, so the extension cannot connect.`}</p>
     </>,
     <>
-      <h2>Lives in the menu bar</h2>
-      <p>Closing the window keeps grabnr running so downloads continue. Click the menu bar icon to see progress, pause everything, or open the window. You can also paste a link anywhere in the window to start a download, or press ⌘N.</p>
+      <h2>Lives in the {TRAY}</h2>
+      <p>Closing the window keeps grabnr running so downloads continue. Click the {TRAY} icon to see progress, pause everything, or open the window. You can also paste a link anywhere in the window to start a download, or press {MOD}N.</p>
     </>,
   ];
 

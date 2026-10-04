@@ -3,6 +3,7 @@ import { api } from "./api";
 import { linkColor } from "./format";
 import { ScheduleEditor } from "./ScheduleEditor";
 import type { LinkRule, LinksResponse, Settings as S, SpikeReport } from "./types";
+import { isMac, TRAY } from "./platform";
 
 export function SettingsPanel({ settings, apiPort, apiOk, keychainAvailable, onChange, onClose }: { settings: S; apiPort: number; apiOk: boolean; keychainAvailable: boolean; onChange: (s: S) => void; onClose: () => void }) {
   const [links, setLinks] = useState<LinksResponse | null>(null);
@@ -118,7 +119,7 @@ export function SettingsPanel({ settings, apiPort, apiOk, keychainAvailable, onC
           {keychainAvailable && (
             <label className="link">
               <input type="checkbox" checked={settings.keychain} onChange={(e) => patch({ keychain: e.target.checked })} />
-              Keep sign-in details and proxy passwords in the macOS Keychain instead of a file
+              Keep sign-in details and proxy passwords in the {isMac ? "macOS Keychain" : "system keychain"} instead of a file
             </label>
           )}
           <label className="link">
@@ -162,7 +163,7 @@ export function SettingsPanel({ settings, apiPort, apiOk, keychainAvailable, onC
             Play a sound when a download finishes
           </label>
           <p className="muted">
-            Starts hidden in the menu bar so the browser extension always has somewhere to send downloads. Closing the window keeps grabnr running; quit it from the menu bar icon.
+            Starts hidden in the {TRAY} so the browser extension always has somewhere to send downloads. Closing the window keeps grabnr running; quit it from the {TRAY} icon.
           </p>
           {autostartErr && <p className="err">{autostartErr}</p>}
         </section>
@@ -200,6 +201,9 @@ export function SettingsPanel({ settings, apiPort, apiOk, keychainAvailable, onC
             <input type="checkbox" checked={settings.skip_cellular} onChange={(e) => patch({ skip_cellular: e.target.checked })} />
             Leave cellular links out unless ticked above
           </label>
+          {links?.binding === "source_address" && (
+            <p className="notice">On this system a download is steered to a connection by its address. That works when each connection has its own router; use Test links to check that traffic really leaves through each one.</p>
+          )}
           {links?.shared_gateways.map(([a, b]) => (
             <p key={a + b} className="notice">{a} and {b} share a gateway, so using both will not add bandwidth.</p>
           ))}

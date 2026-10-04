@@ -17,8 +17,6 @@ jobs:
   engine:
     name: Engine (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # Windows is not supported yet: it is built here to catch breakage early without blocking merges.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -74,12 +72,10 @@ jobs:
           path: test-results/
           retention-days: 7
 
-  # The desktop app is built for macOS first. These jobs only check that it still compiles elsewhere, so platform
-  # problems show up early; they do not block merges until Linux and Windows are supported.
+  # The desktop app on Linux and Windows: it must compile, pass clippy (Linux) and pass its own tests.
   app-other-platforms:
-    name: Desktop app compiles (${{ matrix.os }})
+    name: Desktop app (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -87,6 +83,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v7
         with:
@@ -99,4 +97,6 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev patchelf
       - run: npm ci
       - run: npm run build
-      - run: cargo check -p grabnr
+      - run: cargo clippy -p grabnr --all-targets -- -D warnings
+        if: matrix.os == 'ubuntu-latest'
+      - run: cargo test -p grabnr

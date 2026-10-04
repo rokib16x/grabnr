@@ -250,5 +250,6 @@ fn human(b: u64) -> String {
 
 /// ffmpeg on the PATH, if there is one.
 fn which_ffmpeg() -> Option<PathBuf> {
-    std::env::var_os("PATH").and_then(|p| std::env::split_paths(&p).map(|d| d.join("ffmpeg")).find(|f| f.is_file()))
+    std::env::var_os("PATH")
+        .and_then(|p| std::env::split_paths(&p).map(|d| d.join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" })).find(|f| f.is_file()))
 }

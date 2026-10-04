@@ -21,7 +21,7 @@ pub mod store;
 pub mod writer;
 
 pub use auth::Auth;
-pub use bind::{client_for, client_pooled, BindMode};
+pub use bind::{client_for, client_pooled, strength as bind_strength, BindMode, Strength};
 pub use checksum::{Algo, Checksum};
 pub use download::{download, Event, Options, Route, Snapshot};
 pub use error::{Error, Result};

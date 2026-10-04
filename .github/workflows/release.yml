@@ -1,21 +1,25 @@
 name: Release
 
-# Push a tag like v0.2.0 to build the macOS app and attach it to a draft GitHub release.
+# Push a tag like v0.2.0 to build the apps and attach them to a draft GitHub release.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
 
 jobs:
-  macos:
-    name: macOS (${{ matrix.target }})
-    runs-on: macos-latest
+  app:
+    name: App (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: write
     strategy:
       fail-fast: false
       matrix:
-        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+        include:
+          - { name: "macOS Apple silicon", os: macos-latest, target: aarch64-apple-darwin, args: "--target aarch64-apple-darwin" }
+          - { name: "macOS Intel", os: macos-latest, target: x86_64-apple-darwin, args: "--target x86_64-apple-darwin" }
+          - { name: "Linux", os: ubuntu-24.04, target: "", args: "" }
+          - { name: "Windows", os: windows-latest, target: "", args: "" }
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -26,11 +30,16 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Linux system libraries for Tauri
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev patchelf
       - run: npm ci
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Optional: set these repository secrets to sign and notarize the app.
+          # Optional: set these repository secrets to sign and notarize the macOS app.
           # Without them the build is unsigned and macOS Gatekeeper will warn on first launch.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -44,7 +53,7 @@ jobs:
           releaseBody: See CHANGELOG.md for what changed.
           releaseDraft: true
           prerelease: false
-          args: --target ${{ matrix.target }}
+          args: ${{ matrix.args }}
 
   cli:
     name: CLI (${{ matrix.os }})
@@ -81,3 +90,20 @@ jobs:
         with:
           draft: true
           files: ${{ matrix.asset }}
+
+  extension:
+    name: Browser extensions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - run: node extension/tools/build.mjs
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            extension/dist/grabnr-chrome.zip
+            extension/dist/grabnr-firefox.zip

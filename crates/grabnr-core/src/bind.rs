@@ -27,6 +27,26 @@ impl BindMode {
     }
 }
 
+/// How firmly a bound download is kept on its link on this operating system.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Strength {
+    /// The OS is told to send this socket's traffic out of that interface (`IP_BOUND_IF`, `SO_BINDTODEVICE`).
+    Interface,
+    /// The socket is bound to the link's IP address and the OS routes by it. This steers traffic when each adapter has its
+    /// own gateway (the default "strong host" behaviour of Windows); `grabnr spike` shows whether it did.
+    SourceAddress,
+}
+
+/// What [`BindMode::BoundIf`] means on this system.
+pub fn strength() -> Strength {
+    if cfg!(any(target_os = "macos", target_os = "linux", target_os = "android", target_os = "fuchsia")) {
+        Strength::Interface
+    } else {
+        Strength::SourceAddress
+    }
+}
+
 /// One-shot client (no connection reuse): used by probes and the spike.
 pub fn client_for(link: Option<&Link>, mode: BindMode) -> Result<reqwest::Client, reqwest::Error> {
     build(link, mode, false, None)

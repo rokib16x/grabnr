@@ -14,6 +14,7 @@ import { SettingsPanel } from "./Settings";
 import { filterTitle, matchFilter, Sidebar, type Filter } from "./Sidebar";
 import { useDownloads } from "./store";
 import type { AfterAll, Item, Live, Settings } from "./types";
+import { MOD } from "./platform";
 
 type Sort = "queue" | "newest" | "oldest" | "name" | "size" | "progress";
 const SORTS: { id: Sort; label: string }[] = [
@@ -169,11 +170,11 @@ export function MainWindow() {
   const doneCount = d.items.filter((i) => i.status === "done").length;
 
   const commands: Command[] = useMemo(() => [
-    { id: "add", label: "Add Download…", hint: "⌘N", icon: "plus", run: () => setAdding(true) },
+    { id: "add", label: "Add Download…", hint: `${MOD}N`, icon: "plus", run: () => setAdding(true) },
     { id: "pause", label: "Pause All", icon: "pause", run: () => void api.pauseAll() },
     { id: "resume", label: "Resume All", icon: "play", run: () => void api.resumeAll() },
     { id: "clear", label: "Remove Completed from the List", icon: "trash", run: () => d.items.filter((i) => i.status === "done").forEach((i) => void api.remove(i.id, false)) },
-    { id: "prefs", label: "Preferences…", hint: "⌘,", icon: "sliders", run: () => setSettingsOpen(true) },
+    { id: "prefs", label: "Preferences…", hint: `${MOD},`, icon: "sliders", run: () => setSettingsOpen(true) },
     ...(["all", "downloading", "done", "paused", "history"] as Filter[]).map((f) => ({ id: `go-${f}`, label: `Show ${filterTitle(f)}`, icon: "inbox", run: () => setFilter(f) })),
     ...d.items.map((i) => ({ id: `item-${i.id}`, label: fileName(i.url, i.filename), hint: i.status, icon: "download", run: () => { setFilter("all"); setSelected(i.id); } })),
   ], [d.items]);
@@ -205,7 +206,7 @@ export function MainWindow() {
             )}
           </div>
           <div className="tools">
-            <button className="round" aria-label="Add download" title="Add download (⌘N)" onClick={() => setAdding(true)}><Icon name="plus" /></button>
+            <button className="round" aria-label="Add download" title={`Add download (${MOD}N)`} onClick={() => setAdding(true)}><Icon name="plus" /></button>
             <button className="round" aria-label="Resume all" title="Resume all" disabled={!canResume} onClick={() => api.resumeAll()}><Icon name="play" /></button>
             <button className="round" aria-label="Pause all" title="Pause all" disabled={!canPause} onClick={() => api.pauseAll()}><Icon name="pause" /></button>
             <button className="round" aria-label="Remove completed" title="Remove completed from the list" disabled={!hasDone} onClick={() => d.items.filter((i) => i.status === "done").forEach((i) => api.remove(i.id, false))}><Icon name="trash" /></button>

@@ -2,11 +2,12 @@ import { useEffect } from "react";
 import { MainWindow } from "./MainWindow";
 import { TrayPopover } from "./TrayPopover";
 import "./App.css";
+import { isMac as mac } from "./platform";
 
 // The same bundle serves the main window and the menu bar popover (`?view=tray`).
 const view = new URLSearchParams(window.location.search).get("view");
 const native = "__TAURI_INTERNALS__" in window;
-const mac = /Mac/.test(navigator.platform);
+
 
 export default function App() {
   useEffect(() => {

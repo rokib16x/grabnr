@@ -4,7 +4,7 @@ Download faster by using every network connection at once: Wi-Fi, Ethernet, USB 
 Files are split into chunks, and a worker bound to each interface pulls chunks from a shared queue,
 so faster links take more chunks.
 
-Built with Tauri 2 and Rust (small installer, low memory). macOS first, then Windows and Linux.
+Built with Tauri 2 and Rust (small installer, low memory). Developed on macOS; Linux and Windows builds are produced too (see Platforms).
 
 ## Layout
 
@@ -27,6 +27,17 @@ Built and tested (see [FEATURES.md](FEATURES.md) for the full list):
 Not done yet: FTP/SFTP, torrents, HLS, the scheduler, Safari and Firefox extensions, signed builds and auto-update, Windows and Linux apps.
 
 **Not yet proven on real hardware:** that traffic splits across two links with different gateways. The engine is tested against a local range server and the interface binding is checked by `grabnr spike`, but nobody has yet measured the speed-up on two physical connections.
+
+## Platforms
+
+| | macOS | Linux | Windows |
+|---|---|---|---|
+| Keeps a download on its connection | `IP_BOUND_IF` (strong) | `SO_BINDTODEVICE` (strong) | by source address; works when each adapter has its own router |
+| Menu bar / tray popover | yes | tray menu (Linux trays send no click events) | yes |
+| Translucent sidebar, Dock progress, Quick Look thumbnails, Keychain, quarantine flag | yes | no | no |
+| Tested in CI | build, tests, UI | build, clippy, tests | build, tests |
+
+Run `grabnr spike` on any system to see whether traffic really leaves through each connection.
 
 ## Develop
 

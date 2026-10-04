@@ -7,6 +7,7 @@ import { Icon, linkIcon } from "./icons";
 import { ProgressBar, progressOf } from "./DownloadRow";
 import { SpeedGraph } from "./SpeedGraph";
 import type { Item, Link, Live } from "./types";
+import { FILE_MANAGER } from "./platform";
 
 export function Inspector({ item, live, links }: { item?: Item; live?: Live; links: Link[] }) {
   const [confirming, setConfirming] = useState(false);
@@ -83,7 +84,7 @@ export function Inspector({ item, live, links }: { item?: Item; live?: Live; lin
         {(active || item.status === "queued") && <button onClick={() => api.pause(item.id)}><Icon name="pause" size={14} />Pause</button>}
         {(item.status === "paused" || item.status === "error") && <button onClick={() => api.resume(item.id)}><Icon name="play" size={14} />{item.status === "error" ? "Retry" : "Resume"}</button>}
         {item.status === "done" && <button onClick={() => api.open(item.id)}>Open</button>}
-        {item.status === "done" && <button onClick={() => api.reveal(item.id)}><Icon name="folder" size={14} />Show in Finder</button>}
+        {item.status === "done" && <button onClick={() => api.reveal(item.id)}><Icon name="folder" size={14} />Show in {FILE_MANAGER === "Finder" ? "Finder" : "folder"}</button>}
         {item.status === "done" ? (
           <button onClick={() => api.remove(item.id, false)}>Remove</button>
         ) : confirming ? (

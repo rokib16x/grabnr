@@ -75,7 +75,7 @@ export type Link = {
   is_default_route: boolean;
   link_speed_mbps: number | null;
 };
-export type LinksResponse = { links: Link[]; shared_gateways: [string, string][] };
+export type LinksResponse = { links: Link[]; shared_gateways: [string, string][]; binding: "interface" | "source_address" };
 
 export type ModeResult = { mode: string; public_ip: string | null; verdict: string; error: string | null };
 export type Throughput = { link: string; mbps: number; error: string | null };

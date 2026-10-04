@@ -18,19 +18,6 @@
         "height": 700,
         "minWidth": 760,
         "minHeight": 480,
-        "titleBarStyle": "Overlay",
-        "hiddenTitle": true,
-        "transparent": true,
-        "trafficLightPosition": {
-          "x": 20,
-          "y": 22
-        },
-        "windowEffects": {
-          "effects": [
-            "sidebar"
-          ],
-          "state": "followsWindowActiveState"
-        },
         "dragDropEnabled": false
       },
       {
@@ -41,18 +28,10 @@
         "height": 420,
         "visible": false,
         "decorations": false,
-        "transparent": true,
         "resizable": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "shadow": true,
-        "windowEffects": {
-          "effects": [
-            "popover"
-          ],
-          "state": "active",
-          "radius": 12
-        }
+        "shadow": true
       }
     ],
     "security": {
@@ -69,7 +48,23 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "category": "Utility",
+    "shortDescription": "Download faster over every network connection at once",
+    "longDescription": "grabnr splits a download into pieces and pulls them over Wi-Fi, Ethernet, USB or phone tethering at the same time.",
+    "publisher": "grabnr contributors",
+    "copyright": "MIT License",
+    "license": "MIT",
+    "linux": {
+      "deb": {
+        "depends": []
+      }
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
   },
   "plugins": {
     "deep-link": {

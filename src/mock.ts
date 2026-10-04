@@ -78,6 +78,7 @@ export const mock = {
             { name: "en7", label: "iPhone Hotspot", kind: "cellular", ipv4: "172.20.10.2", gateway: "172.20.10.1", is_default_route: false, link_speed_mbps: null },
           ],
           shared_gateways: [],
+          binding: "interface",
         } satisfies LinksResponse;
       case "add_download": {
         const dup = items.find((i) => i.url.endsWith("/" + String(args.url).split("/").pop()) && i.url === args.url);

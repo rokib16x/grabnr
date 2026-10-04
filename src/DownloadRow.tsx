@@ -4,6 +4,7 @@ import { bytes, eta, fileName, linkColor, rate } from "./format";
 import { Icon } from "./icons";
 import { MoreMenu } from "./Menu";
 import type { Item, Live } from "./types";
+import { FILE_MANAGER } from "./platform";
 
 export function progressOf(item: Item, live?: Live) {
   const downloaded = item.status === "downloading" ? Math.max(live?.downloaded ?? 0, item.downloaded) : item.downloaded;
@@ -77,7 +78,7 @@ export function DownloadRow({ item, live, selected, onSelect, drag, onChangeLink
         <PlayPause item={item} />
         <MoreMenu
           items={[
-            ...(item.status === "done" ? [{ label: "Open", onClick: () => api.open(item.id) }, { label: "Show in Finder", onClick: () => api.reveal(item.id) }] : []),
+            ...(item.status === "done" ? [{ label: "Open", onClick: () => api.open(item.id) }, { label: FILE_MANAGER === "Finder" ? "Show in Finder" : "Show in folder", onClick: () => api.reveal(item.id) }] : []),
             ...(item.status === "queued" || item.status === "paused" ? [{ label: "Download next", onClick: () => api.move(item.id, true) }, { label: "Download last", onClick: () => api.move(item.id, false) }] : []),
             ...(onChangeLink && (item.status === "paused" || item.status === "error" || item.status === "queued") ? [{ label: "Change link…", onClick: () => onChangeLink(item) }] : []),
             { label: "Copy link", onClick: () => void navigator.clipboard?.writeText(item.url) },
