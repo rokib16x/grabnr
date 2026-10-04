@@ -10,8 +10,20 @@ export function SettingsPanel({ settings, apiPort, apiOk, onChange, onClose }: {
   const [report, setReport] = useState<SpikeReport | null>(null);
   const [testing, setTesting] = useState(false);
   const [testErr, setTestErr] = useState<string | null>(null);
+  const [autostart, setAutostart] = useState<boolean | null>(null);
+  const [autostartErr, setAutostartErr] = useState<string | null>(null);
 
   useEffect(() => void api.links().then(setLinks), []);
+  useEffect(() => void api.autostart().then(setAutostart).catch(() => setAutostart(false)), []);
+
+  async function toggleAutostart(on: boolean) {
+    setAutostartErr(null);
+    try {
+      setAutostart(await api.setAutostart(on));
+    } catch (e) {
+      setAutostartErr(String(e));
+    }
+  }
   useEffect(() => {
     if (pairLeft <= 0) return;
     const t = setTimeout(() => setPairLeft(pairLeft - 1), 1000);
@@ -63,6 +75,18 @@ export function SettingsPanel({ settings, apiPort, apiOk, onChange, onClose }: {
             <span>Simultaneous downloads</span>
             <input type="number" min={1} max={10} value={settings.max_active} onChange={(e) => patch({ max_active: +e.target.value })} />
           </div>
+        </section>
+
+        <section>
+          <h3>System</h3>
+          <label className="link">
+            <input type="checkbox" checked={!!autostart} disabled={autostart === null} onChange={(e) => toggleAutostart(e.target.checked)} />
+            Launch at login
+          </label>
+          <p className="muted">
+            Starts hidden in the menu bar so the browser extension always has somewhere to send downloads. Closing the window keeps grabnr running; quit it from the menu bar icon.
+          </p>
+          {autostartErr && <p className="err">{autostartErr}</p>}
         </section>
 
         <section>

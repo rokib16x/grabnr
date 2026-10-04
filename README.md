@@ -29,7 +29,9 @@ Working now (`grabnr-core`, tested):
 
 Also working: the desktop app (queue, pause/resume, notifications, per-link share bar, chunk grid, speed graph, settings) and the browser-extension capture API.
 
-Not done yet: Firefox/Safari extensions, tray icon and launch at login, adaptive connection growth, checksums, FTP/SFTP/torrents, the rest of `FEATURES.md`.
+Also: menu bar icon with live speed (open, pause all, resume all, quit), closing the window keeps grabnr running, and an optional launch-at-login that starts hidden.
+
+Not done yet: Firefox/Safari extensions, adaptive connection growth, checksums, FTP/SFTP/torrents, the rest of `FEATURES.md`.
 
 Still to prove on real hardware: that traffic splits across two links with different gateways.
 

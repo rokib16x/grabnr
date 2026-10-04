@@ -101,6 +101,7 @@ struct Inner {
     cancels: HashMap<String, CancellationToken>,
     /// Ids being removed, so a cancel is not reported as "paused".
     removing: Vec<String>,
+    speeds: HashMap<String, f64>,
 }
 
 pub struct Manager {
@@ -161,7 +162,7 @@ impl Manager {
             app,
             data_dir,
             store,
-            inner: Mutex::new(Inner { items, settings, cancels: HashMap::new(), removing: Vec::new() }),
+            inner: Mutex::new(Inner { items, settings, cancels: HashMap::new(), removing: Vec::new(), speeds: HashMap::new() }),
             pairing_until: Mutex::new(None),
             api_ok: Mutex::new(false),
         });
@@ -292,6 +293,28 @@ impl Manager {
         let _ = self.app.emit("item-removed", id);
     }
 
+    /// (running downloads, combined bytes/s) for the menu bar.
+    pub fn summary(&self) -> (usize, f64) {
+        let g = self.inner.lock().unwrap();
+        (g.cancels.len(), g.speeds.values().sum())
+    }
+
+    pub fn pause_all(&self) {
+        let ids: Vec<String> =
+            self.inner.lock().unwrap().items.iter().filter(|i| matches!(i.status, Status::Downloading | Status::Queued)).map(|i| i.id.clone()).collect();
+        for id in ids {
+            self.pause(&id);
+        }
+    }
+
+    pub fn resume_all(self: &Arc<Self>) {
+        let ids: Vec<String> = self.inner.lock().unwrap().items.iter().filter(|i| i.status == Status::Paused).map(|i| i.id.clone()).collect();
+        for id in ids {
+            self.set_status(&id, Status::Queued, None);
+        }
+        self.pump();
+    }
+
     pub fn find_path(&self, id: &str) -> Option<PathBuf> {
         let g = self.inner.lock().unwrap();
         let i = g.items.iter().find(|i| i.id == id)?;
@@ -378,6 +401,7 @@ impl Manager {
 
     fn on_event(&self, id: &str, e: Event) {
         let mut changed = false;
+        let mut speed = None;
         {
             let mut g = self.inner.lock().unwrap();
             if let Some(i) = g.items.iter_mut().find(|i| i.id == id) {
@@ -387,9 +411,15 @@ impl Manager {
                         i.total = *total;
                         changed = true;
                     }
-                    Event::Progress(s) => i.downloaded = s.downloaded,
+                    Event::Progress(s) => {
+                        i.downloaded = s.downloaded;
+                        speed = Some(s.bytes_per_sec);
+                    }
                     _ => {}
                 }
+            }
+            if let Some(v) = speed {
+                g.speeds.insert(id.to_string(), v);
             }
         }
         if changed {
@@ -402,6 +432,7 @@ impl Manager {
         let removed = {
             let mut g = self.inner.lock().unwrap();
             g.cancels.remove(id);
+            g.speeds.remove(id);
             g.removing.iter().position(|r| r == id).map(|p| g.removing.remove(p)).is_some()
         };
         if !removed {

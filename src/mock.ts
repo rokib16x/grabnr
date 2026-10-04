@@ -7,6 +7,7 @@ let handlers: Handlers | null = null;
 const items: Item[] = [];
 const settings: Settings = { dest_dir: "/Users/you/Downloads", enabled_links: null, conns_per_route: 8, max_active: 3, token: "d3adbeefcafe0123456789abcdef0123456789abcd" };
 const timers = new Map<string, number>();
+let autostart = false;
 
 function seed(name: string, total: number, status: Item["status"], downloaded: number): Item {
   const it: Item = { id: Math.random().toString(16).slice(2, 10), url: `https://example.com/files/${name}`, filename: name, dir: settings.dest_dir, status, total, downloaded, path: status === "done" ? `${settings.dest_dir}/${name}` : null, error: null, added: Date.now() / 1000 };
@@ -85,6 +86,8 @@ export const mock = {
       case "resume_download": { const it = items.find((i) => i.id === args.id); if (it) run(it); return; }
       case "remove_download": { const k = items.findIndex((i) => i.id === args.id); if (k >= 0) items.splice(k, 1); handlers?.removed(String(args.id)); return; }
       case "set_settings": Object.assign(settings, args.patch); return settings;
+      case "get_autostart": return autostart;
+      case "set_autostart": autostart = Boolean(args.enabled); return autostart;
       case "allow_pairing": return 60;
       case "run_spike": throw "Link test is only available in the desktop app";
       default: return;
