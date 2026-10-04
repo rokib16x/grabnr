@@ -21,6 +21,7 @@ pub mod scheduler;
 pub mod sftp;
 pub mod spike;
 pub mod store;
+pub mod torrent;
 pub mod writer;
 
 pub use auth::Auth;

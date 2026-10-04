@@ -83,7 +83,9 @@ export const mock = {
       case "add_download": {
         const dup = items.find((i) => i.url.endsWith("/" + String(args.url).split("/").pop()) && i.url === args.url);
         if (dup) return { id: dup.id, duplicate: true };
-        const it = seed(String(args.url).split("/").pop() || "download", 600e6, "queued", 0);
+        const u = String(args.url);
+        const named = /^magnet:/i.test(u) ? (new URLSearchParams(u.slice(u.indexOf("?") + 1)).get("dn") ?? "Torrent") : u.split("/").pop() || "download";
+        const it = seed(named, 600e6, "queued", 0);
         handlers?.item({ ...it });
         setTimeout(() => run(it), 300);
         return { id: it.id, duplicate: false };

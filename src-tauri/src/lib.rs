@@ -89,7 +89,7 @@ fn get_state(m: Mgr) -> AppState {
 fn build_request(url: String, o: &AddOptions) -> Result<AddRequest, String> {
     let url = url.trim().to_string();
     if !grabnr_core::links::downloadable(&url) {
-        return Err("Enter a full http://, https://, ftp:// or sftp:// link".into());
+        return Err("Enter a full web, ftp://, sftp:// or magnet: link".into());
     }
     // A user name and password typed into the link are kept apart from it, so they never show up in the list.
     let (url, link_creds) = manager::split_userinfo(&url);

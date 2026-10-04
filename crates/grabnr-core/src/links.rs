@@ -2,9 +2,9 @@
 
 use url::Url;
 
-/// Links grabnr can download: web (http, https), FTP and SFTP.
+/// Links grabnr can download: web (http, https), FTP, SFTP and magnet links.
 pub fn downloadable(url: &str) -> bool {
-    url::Url::parse(url).is_ok_and(|u| matches!(u.scheme(), "http" | "https" | "ftp" | "sftp"))
+    url::Url::parse(url).is_ok_and(|u| matches!(u.scheme(), "http" | "https" | "ftp" | "sftp" | "magnet"))
 }
 
 /// One URL per line. Blank lines and `#` comments are skipped, duplicates dropped, and only downloadable links are kept.
@@ -133,9 +133,17 @@ mod tests {
     #[test]
     fn url_lists() {
         let l = parse_url_list(
-            "# my files\nhttps://a.example/1.zip\n\n  http://b.example/2.zip  \nftp://files.example/3.iso\nmailto:x@y.z\nnot a url\nhttps://a.example/1.zip\n",
+            "# my files\nhttps://a.example/1.zip\n\n  http://b.example/2.zip  \nftp://files.example/3.iso\nmagnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Pack\nmailto:x@y.z\nnot a url\nhttps://a.example/1.zip\n",
         );
-        assert_eq!(l, vec!["https://a.example/1.zip", "http://b.example/2.zip", "ftp://files.example/3.iso"]);
+        assert_eq!(
+            l,
+            vec![
+                "https://a.example/1.zip",
+                "http://b.example/2.zip",
+                "ftp://files.example/3.iso",
+                "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Pack"
+            ]
+        );
     }
 
     #[test]

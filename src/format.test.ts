@@ -25,6 +25,11 @@ describe("file names and types", () => {
     expect(fileName("not a url", null)).toBe("not a url");
   });
 
+  it("names a magnet link by its display name", () => {
+    expect(fileName("magnet:?xt=urn:btih:abc&dn=Linux+ISOs", null)).toBe("Linux ISOs");
+    expect(fileName("magnet:?xt=urn:btih:abc", null)).toBe("Torrent");
+  });
+
   it("sorts files into categories", () => {
     expect(categoryOf("movie.MP4")).toBe("video");
     expect(categoryOf("song.flac")).toBe("audio");

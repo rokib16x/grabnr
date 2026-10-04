@@ -98,6 +98,8 @@ pub struct Options {
     pub resume_key: Option<String>,
     /// SSH settings for `sftp://` links: where host keys are remembered and an optional private key.
     pub ssh: crate::sftp::SshOptions,
+    /// Peers to try first for a torrent (besides the swarm); with any given, DHT and trackers are not used.
+    pub torrent_peers: Vec<std::net::SocketAddr>,
     /// Which stream of an HLS master playlist to download.
     pub hls_quality: crate::hls::Quality,
     /// ffmpeg to turn a downloaded HLS transport stream into an MP4 without re-encoding; none leaves a `.ts`.
@@ -131,6 +133,7 @@ impl Options {
             no_link_grace: Duration::from_secs(30),
             mirrors: Vec::new(),
             resume_key: None,
+            torrent_peers: Vec::new(),
             ssh: crate::sftp::SshOptions::default(),
             hls_quality: crate::hls::Quality::Best,
             ffmpeg: None,
@@ -342,6 +345,12 @@ pub async fn download(mut opts: Options, cancel: CancellationToken, emit: Emit) 
     if let Some(a) = &opts.auth {
         opts.headers.retain(|(k, _)| !k.eq_ignore_ascii_case("authorization"));
         opts.headers.push(("Authorization".into(), a.header_value()));
+    }
+    // A torrent is a swarm of peers rather than one server: its own engine.
+    if crate::torrent::looks_like(&opts.url) {
+        let path = crate::torrent::download(&opts, cancel, emit.clone()).await?;
+        emit(Event::Finished { path: path.display().to_string() });
+        return Ok(path);
     }
     // A playlist is not one file but many small ones: it has its own path through the engine.
     if crate::hls::looks_like(&opts.url) {

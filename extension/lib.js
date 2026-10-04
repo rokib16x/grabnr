@@ -7,7 +7,8 @@ export const BASE_URL = globalThis.__GRABNR_BASE_URL || 'http://127.0.0.1:17653'
 export const DEFAULTS = {
   enabled: true,
   token: '',
-  skipExtensions: [],
+  // .torrent files are handed to the browser: grabnr would otherwise download the content they describe.
+  skipExtensions: ['torrent'],
   skipDomains: [],
   minSizeMB: 0,
 };

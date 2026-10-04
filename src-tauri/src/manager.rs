@@ -586,7 +586,7 @@ impl Manager {
     pub fn update_link(self: &Arc<Self>, id: &str, url: &str) -> Result<(), String> {
         let url = url.trim();
         if !grabnr_core::links::downloadable(url) {
-            return Err("Enter a full http://, https://, ftp:// or sftp:// link".into());
+            return Err("Enter a full web, ftp://, sftp:// or magnet: link".into());
         }
         {
             let mut g = self.inner.lock().unwrap();

@@ -96,7 +96,7 @@ export function MainWindow() {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
       const t = e.clipboardData?.getData("text")?.trim() ?? "";
-      if (/^(https?|s?ftp):\/\/\S+/i.test(t)) void addText(t);
+      if (/^((https?|s?ftp):\/\/|magnet:\?)\S+/i.test(t)) void addText(t);
     };
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey)) return;

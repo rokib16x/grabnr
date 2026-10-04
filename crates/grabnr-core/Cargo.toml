@@ -27,6 +27,7 @@ sha1 = "0.10"
 md-5 = "0.10"
 russh = "0.63.3"
 russh-sftp = "3.0.1"
+librqbit = { version = "9", default-features = false, features = ["rust-tls"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

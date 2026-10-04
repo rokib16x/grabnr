@@ -9,6 +9,7 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 - **Reliability:** links that join or leave a running download, restart on a changed IP, stalled-connection recovery, revival of failed links, automatic retries with growing delays.
 - **Platforms:** Linux and Windows builds in CI and the release workflow, per-platform window settings, one running copy at a time, sleep and shell actions for each system, popover placement for a taskbar at the bottom of the screen.
 - **Browsers:** a Firefox build of the extension (`npm run build:extension`), and expired links re-captured from the browser continue the failed download instead of starting a new one.
+- **Torrents:** magnet links and `.torrent` files. Multi-file torrents are split by file over your connections; the browser extension leaves `.torrent` files to the browser by default.
 - **Protocols:** FTP and SFTP downloads, split over every link like web downloads. SFTP remembers server keys and refuses a changed one; user names and passwords typed into a link are kept out of the list.
 - **Streams:** HLS (`.m3u8`) downloads, with a quality picker, AES-128 decryption, resume, and conversion to MP4 when ffmpeg is installed.
 - **Sources:** mirrors, Metalink (`.meta4`, `.metalink`), batch link lists, a page link picker, per-download sign-in (Basic, Bearer) and proxies (HTTP, HTTPS, SOCKS5).

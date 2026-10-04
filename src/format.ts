@@ -42,6 +42,8 @@ export const linkColor = (name: string) => {
 
 export const fileName = (url: string, filename: string | null) => {
   if (filename) return filename;
+  // A magnet link names the torrent in its `dn` parameter.
+  if (/^magnet:/i.test(url)) return new URLSearchParams(url.slice(url.indexOf("?") + 1)).get("dn") ?? "Torrent";
   try {
     return decodeURIComponent(new URL(url).pathname.split("/").filter(Boolean).pop() ?? url);
   } catch {

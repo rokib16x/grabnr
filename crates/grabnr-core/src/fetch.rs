@@ -1,4 +1,4 @@
-//! Small text fetches for things that are not downloads: Metalink documents and web pages.
+//! Small fetches for things that are not downloads: Metalink documents, web pages, torrent files.
 
 use std::time::Duration;
 
@@ -14,6 +14,17 @@ pub async fn fetch_text(
     proxy: Option<&str>,
     max_bytes: usize,
 ) -> Result<(String, Option<String>)> {
+    let (body, ct) = fetch_bytes(url, headers, proxy, max_bytes).await?;
+    Ok((String::from_utf8_lossy(&body).into_owned(), ct))
+}
+
+/// GET a small file over the default route (a `.torrent`, for instance). Returns the bytes and the Content-Type.
+pub async fn fetch_bytes(
+    url: &str,
+    headers: &[(String, String)],
+    proxy: Option<&str>,
+    max_bytes: usize,
+) -> Result<(Vec<u8>, Option<String>)> {
     let client = client_via_proxy(None, BindMode::None, proxy)?;
     let mut req = client.get(url);
     for (k, v) in headers {
@@ -33,7 +44,7 @@ pub async fn fetch_text(
                 return Err(Error::Other(format!("the page is larger than {} MB", max_bytes >> 20)));
             }
         }
-        Ok((String::from_utf8_lossy(&body).into_owned(), ct))
+        Ok((body, ct))
     };
     tokio::time::timeout(Duration::from_secs(20), work).await.map_err(|_| Error::Other("the server did not answer in time".into()))?
 }
