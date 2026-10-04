@@ -38,6 +38,15 @@ enum Cmd {
         /// Verify the file against this hash (`sha256:<hex>`, `sha1:<hex>`, `md5:<hex>`, or bare hex)
         #[arg(long)]
         checksum: Option<String>,
+        /// Proxy for every link: http://host:port or socks5://host:port
+        #[arg(long)]
+        proxy: Option<String>,
+        /// Basic auth as user:password
+        #[arg(long)]
+        user: Option<String>,
+        /// Bearer token
+        #[arg(long)]
+        bearer: Option<String>,
     },
     /// Check that interface binding works and that links add up
     Spike {
@@ -75,7 +84,7 @@ async fn main() {
                 println!("warning: {a} and {b} share a gateway and will not add bandwidth");
             }
         }
-        Cmd::Get { url, out, only, conns, headers, limit, checksum } => {
+        Cmd::Get { url, out, only, conns, headers, limit, checksum, proxy, user, bearer } => {
             let mut links = list_links();
             if !only.is_empty() {
                 links.retain(|l| only.contains(&l.name));
@@ -91,6 +100,15 @@ async fn main() {
             std::fs::create_dir_all(&db).ok();
             let mut opts = Options::new(url, out, routes);
             opts.conns_per_route = conns;
+            opts.proxy = proxy;
+            opts.auth = match (bearer, user) {
+                (Some(t), _) => Some(grabnr_core::Auth::Bearer(t)),
+                (None, Some(u)) => {
+                    let (user, pass) = u.split_once(':').unwrap_or((u.as_str(), ""));
+                    Some(grabnr_core::Auth::Basic { user: user.into(), pass: pass.into() })
+                }
+                _ => None,
+            };
             opts.speed_limit = limit.filter(|l| *l > 0.0).map(|l| (l * 1024.0 * 1024.0) as u64);
             if let Some(c) = checksum {
                 opts.checksum = Some(grabnr_core::Checksum::parse(&c).unwrap_or_else(|e| {

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { linkColor } from "./format";
-import type { LinksResponse, Settings as S, SpikeReport } from "./types";
+import type { LinkRule, LinksResponse, Settings as S, SpikeReport } from "./types";
 
 export function SettingsPanel({ settings, apiPort, apiOk, onChange, onClose }: { settings: S; apiPort: number; apiOk: boolean; onChange: (s: S) => void; onClose: () => void }) {
   const [links, setLinks] = useState<LinksResponse | null>(null);
@@ -76,6 +76,10 @@ export function SettingsPanel({ settings, apiPort, apiOk, onChange, onClose }: {
             <input type="number" min={0} max={100000} step={0.5} value={settings.speed_limit_kbps / 1024} onChange={(e) => patch({ speed_limit_kbps: Math.round(Math.max(0, +e.target.value) * 1024) })} />
           </div>
           <div className="field">
+            <span>Proxy (all downloads)</span>
+            <input defaultValue={settings.proxy} placeholder="None, or socks5://127.0.0.1:1080" spellCheck={false} onBlur={(e) => e.target.value !== settings.proxy && patch({ proxy: e.target.value })} />
+          </div>
+          <div className="field">
             <span>Retry failed downloads</span>
             <input type="number" min={0} max={10} value={settings.auto_retry} onChange={(e) => patch({ auto_retry: +e.target.value })} />
             <span className="muted">times, with growing delays</span>
@@ -102,13 +106,35 @@ export function SettingsPanel({ settings, apiPort, apiOk, onChange, onClose }: {
           <h3>Network links</h3>
           {!links && <p className="muted">Looking for links…</p>}
           {links?.links.length === 0 && <p className="muted">No active links found. Downloads use the system default route.</p>}
-          {links?.links.map((l) => (
-            <label key={l.name} className="link">
-              <input type="checkbox" checked={enabled(l.name)} onChange={() => toggle(l.name)} />
-              <i style={{ background: linkColor(l.name) }} />
-              <b>{l.name}</b> {l.label} <span className="muted">{l.kind.replace("_", "-")} · {l.ipv4}{l.is_default_route ? " · default route" : ""}</span>
-            </label>
-          ))}
+          {links?.links.map((l) => {
+            const rule = settings.link_rules[l.name] ?? { share_pct: 100, limit_kbps: 0 };
+            const setRule = (p: Partial<LinkRule>) => patch({ link_rules: { ...settings.link_rules, [l.name]: { ...rule, ...p } } });
+            return (
+              <div key={l.name} className="link-rule">
+                <label className="link">
+                  <input type="checkbox" checked={enabled(l.name)} onChange={() => toggle(l.name)} />
+                  <i style={{ background: linkColor(l.name) }} />
+                  <span><b>{l.name}</b> {l.label} <span className="muted">{l.kind.replace("_", "-")} · {l.ipv4}{l.is_default_route ? " · default route" : ""}</span></span>
+                </label>
+                {enabled(l.name) && (
+                  <div className="rule-fields">
+                    <label>Share
+                      <select value={rule.share_pct} onChange={(e) => setRule({ share_pct: +e.target.value })} aria-label={`${l.label} share of connections`}>
+                        {[100, 75, 50, 25].map((p) => <option key={p} value={p}>{p}%</option>)}
+                      </select>
+                    </label>
+                    <label>Limit
+                      <input type="number" min={0} step={0.5} value={rule.limit_kbps / 1024} onChange={(e) => setRule({ limit_kbps: Math.round(Math.max(0, +e.target.value) * 1024) })} aria-label={`${l.label} speed limit in MB/s`} /> MB/s
+                    </label>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          <label className="link">
+            <input type="checkbox" checked={settings.skip_cellular} onChange={(e) => patch({ skip_cellular: e.target.checked })} />
+            Leave cellular links out unless ticked above
+          </label>
           {links?.shared_gateways.map(([a, b]) => (
             <p key={a + b} className="notice">{a} and {b} share a gateway, so using both will not add bandwidth.</p>
           ))}

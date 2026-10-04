@@ -2,6 +2,7 @@
 //! whether traffic really leaves through the interface we asked for.
 
 pub mod adapt;
+pub mod auth;
 pub mod bind;
 pub mod checksum;
 pub mod disk;
@@ -15,6 +16,7 @@ pub mod spike;
 pub mod store;
 pub mod writer;
 
+pub use auth::Auth;
 pub use checksum::{Algo, Checksum};
 pub use bind::{client_for, client_pooled, BindMode};
 pub use download::{download, Event, Options, Route, Snapshot};

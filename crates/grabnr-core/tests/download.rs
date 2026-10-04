@@ -13,6 +13,8 @@ struct Server {
     version: Arc<AtomicU64>,
     fail_first: Arc<AtomicUsize>,
     bytes_served: Arc<AtomicU64>,
+    /// When set, requests must carry exactly this Authorization header (compared lowercased).
+    need_auth: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 fn byte(i: u64, version: u64) -> u8 {
@@ -29,11 +31,12 @@ async fn serve(ranges: bool) -> Server {
     let version = Arc::new(AtomicU64::new(0));
     let fail_first = Arc::new(AtomicUsize::new(0));
     let bytes_served = Arc::new(AtomicU64::new(0));
-    let (v, f, b) = (version.clone(), fail_first.clone(), bytes_served.clone());
+    let need_auth: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
+    let (v, f, b, na) = (version.clone(), fail_first.clone(), bytes_served.clone(), need_auth.clone());
     tokio::spawn(async move {
         loop {
             let Ok((mut sock, _)) = listener.accept().await else { return };
-            let (v, f, b) = (v.clone(), f.clone(), b.clone());
+            let (v, f, b, na) = (v.clone(), f.clone(), b.clone(), na.clone());
             tokio::spawn(async move {
                 let mut buf = Vec::new();
                 let mut tmp = [0u8; 2048];
@@ -45,6 +48,13 @@ async fn serve(ranges: bool) -> Server {
                 }
                 let req = String::from_utf8_lossy(&buf).to_lowercase();
                 let header = |name: &str| req.lines().find_map(|l| l.strip_prefix(&format!("{name}: "))).map(str::to_owned);
+                let want = na.lock().unwrap().clone();
+                if let Some(want) = want {
+                    if header("authorization").as_deref() != Some(want.to_lowercase().as_str()) {
+                        let _ = sock.write_all(b"HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\nconnection: close\r\n\r\n").await;
+                        return;
+                    }
+                }
                 let ver = v.load(Ordering::Relaxed);
                 let etag = format!("\"v{ver}\"");
 
@@ -80,7 +90,7 @@ async fn serve(ranges: bool) -> Server {
             });
         }
     });
-    Server { port, version, fail_first, bytes_served }
+    Server { port, version, fail_first, bytes_served, need_auth }
 }
 
 fn silent() -> Arc<dyn Fn(Event) + Send + Sync> {
@@ -258,4 +268,57 @@ async fn verifies_checksum_and_rejects_a_bad_one() {
     let err = download(o, CancellationToken::new(), silent()).await.unwrap_err();
     assert!(matches!(err, Error::ChecksumMismatch { .. }), "{err}");
     assert!(!dir.join("h.bin").exists() && !dir.join("h.bin.grabnr").exists(), "a corrupt file must not be left behind");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sends_basic_and_bearer_credentials() {
+    let s = serve(true).await;
+    let url = format!("http://127.0.0.1:{}/a.bin", s.port);
+
+    *s.need_auth.lock().unwrap() = Some("Basic dTpw".into());
+    let mut o = Options::new(&url, tmp("auth-none"), two_routes());
+    let err = download(o, CancellationToken::new(), silent()).await.unwrap_err();
+    assert!(matches!(err, Error::Status(401)), "{err}");
+
+    o = Options::new(&url, tmp("auth-basic"), two_routes());
+    o.auth = Some(grabnr_core::Auth::Basic { user: "u".into(), pass: "p".into() });
+    let path = download(o, CancellationToken::new(), silent()).await.unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), expected(0));
+
+    *s.need_auth.lock().unwrap() = Some("Bearer tok".into());
+    o = Options::new(&url, tmp("auth-bearer"), two_routes());
+    o.auth = Some(grabnr_core::Auth::Bearer("tok".into()));
+    assert!(download(o, CancellationToken::new(), silent()).await.is_ok());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn downloads_through_an_http_proxy() {
+    // The test server answers any request line, so it doubles as a proxy: the target host below does not exist.
+    let proxy = serve(true).await;
+    let mut o = Options::new("http://files.invalid/p.bin", tmp("proxy"), two_routes());
+    o.proxy = Some(format!("http://127.0.0.1:{}", proxy.port));
+    let path = download(o, CancellationToken::new(), silent()).await.unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), expected(0));
+
+    let direct = Options::new("http://files.invalid/p.bin", tmp("noproxy"), two_routes());
+    assert!(download(direct, CancellationToken::new(), silent()).await.is_err(), "without the proxy the host cannot be reached");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_link_can_be_limited_to_fewer_connections() {
+    let s = serve(true).await;
+    let mut routes = two_routes();
+    routes[0].max_conns = Some(1);
+    let peak = Arc::new(AtomicUsize::new(0));
+    let p = peak.clone();
+    let emit: Arc<dyn Fn(Event) + Send + Sync> = Arc::new(move |e| {
+        if let Event::Progress(snap) = e {
+            p.fetch_max(snap.routes[0].connections, Ordering::Relaxed);
+        }
+    });
+    let mut o = Options::new(format!("http://127.0.0.1:{}/m.bin", s.port), tmp("maxconns"), routes);
+    o.conns_per_route = 6;
+    let path = download(o, CancellationToken::new(), emit).await.unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), expected(0));
+    assert!(peak.load(Ordering::Relaxed) <= 1, "link a was capped at one connection");
 }

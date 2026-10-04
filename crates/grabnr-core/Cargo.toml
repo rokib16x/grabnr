@@ -8,12 +8,13 @@ license = "MIT"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "io-util"] }
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "socks"] }
 futures-util = "0.3"
 netdev = "0.46"
 thiserror = "2"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 tokio-util = "0.7.19"
+base64 = "0.22"
 sha2 = "0.10"
 sha1 = "0.10"
 md-5 = "0.10"

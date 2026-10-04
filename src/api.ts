@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { mock } from "./mock";
-import type { AddResult, AppState, EngineEvent, Item, LinksResponse, Settings, SpikeReport } from "./types";
+import type { AddOptions, AddResult, AppState, EngineEvent, Item, LinksResponse, Settings, SpikeReport } from "./types";
 
 const native = "__TAURI_INTERNALS__" in window;
 const call = <T,>(cmd: string, args?: Record<string, unknown>) => (native ? invoke<T>(cmd, args) : (mock.call(cmd, args) as Promise<T>));
@@ -10,7 +10,7 @@ const call = <T,>(cmd: string, args?: Record<string, unknown>) => (native ? invo
 export const api = {
   state: () => call<AppState>("get_state"),
   links: () => call<LinksResponse>("get_links"),
-  add: (url: string, filename?: string, dir?: string, checksum?: string) => call<AddResult>("add_download", { url, filename: filename || null, dir: dir || null, checksum: checksum || null }),
+  add: (url: string, options?: AddOptions) => call<AddResult>("add_download", { url, options: options ?? null }),
   pauseAll: () => call<void>("pause_all"),
   resumeAll: () => call<void>("resume_all"),
   quit: () => call<void>("quit_app"),

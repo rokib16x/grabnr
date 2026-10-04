@@ -47,6 +47,9 @@ pub struct Item {
     /// Automatic retries used so far (reset on success or a manual resume).
     #[serde(default)]
     pub retries: u32,
+    /// Proxy just for this download; may hold credentials, so it never reaches the UI.
+    #[serde(default)]
+    pub proxy: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -100,6 +103,29 @@ pub struct Settings {
     /// Times a failed download is retried automatically (with growing delays); 0 turns it off.
     #[serde(default = "default_auto_retry")]
     pub auto_retry: u32,
+    /// Per-link share of connections and speed cap, keyed by interface name.
+    #[serde(default)]
+    pub link_rules: HashMap<String, LinkRule>,
+    /// Leave cellular links out unless they are ticked explicitly.
+    #[serde(default)]
+    pub skip_cellular: bool,
+    /// Proxy for every download that has none of its own; empty means direct.
+    #[serde(default)]
+    pub proxy: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct LinkRule {
+    /// Percent of `conns_per_route` this link may open (10-100).
+    #[serde(default = "full_share")]
+    pub share_pct: u8,
+    /// Speed cap for this link in KB/s; 0 means unlimited.
+    #[serde(default)]
+    pub limit_kbps: u64,
+}
+
+fn full_share() -> u8 {
+    100
 }
 
 fn default_auto_retry() -> u32 {
@@ -114,6 +140,9 @@ pub struct SettingsPatch {
     pub max_active: Option<usize>,
     pub speed_limit_kbps: Option<u64>,
     pub auto_retry: Option<u32>,
+    pub link_rules: Option<HashMap<String, LinkRule>>,
+    pub skip_cellular: Option<bool>,
+    pub proxy: Option<String>,
 }
 
 pub struct AddRequest {
@@ -123,6 +152,7 @@ pub struct AddRequest {
     /// Save folder for this download; falls back to the default in settings.
     pub dir: Option<String>,
     pub checksum: Option<String>,
+    pub proxy: Option<String>,
 }
 
 struct Inner {
@@ -183,6 +213,9 @@ impl Manager {
                 token: random_hex(24),
                 speed_limit_kbps: 0,
                 auto_retry: default_auto_retry(),
+                link_rules: HashMap::new(),
+                skip_cellular: false,
+                proxy: String::new(),
             });
         let mut items: Vec<Item> =
             std::fs::read(data_dir.join("downloads.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
@@ -243,6 +276,18 @@ impl Manager {
             if let Some(v) = p.auto_retry {
                 g.settings.auto_retry = v.min(10);
             }
+            if let Some(mut v) = p.link_rules {
+                for r in v.values_mut() {
+                    r.share_pct = r.share_pct.clamp(10, 100);
+                }
+                g.settings.link_rules = v;
+            }
+            if let Some(v) = p.skip_cellular {
+                g.settings.skip_cellular = v;
+            }
+            if let Some(v) = p.proxy {
+                g.settings.proxy = v.trim().to_string();
+            }
         }
         self.persist();
     }
@@ -299,6 +344,7 @@ impl Manager {
                     checksum: req.checksum.filter(|c| !c.trim().is_empty()),
                     priority: 0,
                     retries: 0,
+                    proxy: req.proxy.filter(|p| !p.trim().is_empty()),
                 },
             );
         }
@@ -433,14 +479,24 @@ impl Manager {
     }
 
     fn routes(&self) -> Vec<Route> {
-        let enabled = self.inner.lock().unwrap().settings.enabled_links.clone();
+        let (enabled, rules, skip_cellular, conns) = {
+            let g = self.inner.lock().unwrap();
+            (g.settings.enabled_links.clone(), g.settings.link_rules.clone(), g.settings.skip_cellular, g.settings.conns_per_route)
+        };
         let routes: Vec<Route> = list_links()
             .iter()
             .filter(|l| match &enabled {
                 Some(names) => names.contains(&l.name),
-                None => l.kind != LinkKind::Tunnel,
+                None => l.kind != LinkKind::Tunnel && !(skip_cellular && l.kind == LinkKind::Cellular),
             })
-            .map(Route::from_link)
+            .map(|l| {
+                let mut r = Route::from_link(l);
+                if let Some(rule) = rules.get(&l.name) {
+                    r.max_conns = Some((conns * rule.share_pct.clamp(10, 100) as usize).div_ceil(100).max(1));
+                    r.speed_limit = (rule.limit_kbps > 0).then(|| rule.limit_kbps * 1024);
+                }
+                r
+            })
             .collect();
         if routes.is_empty() {
             vec![Route::unbound("default")]
@@ -450,11 +506,11 @@ impl Manager {
     }
 
     fn start(self: &Arc<Self>, item: Item) {
-        let (conns, limit, cancel) = {
+        let (conns, limit, global_proxy, cancel) = {
             let mut g = self.inner.lock().unwrap();
             let c = CancellationToken::new();
             g.cancels.insert(item.id.clone(), c.clone());
-            (g.settings.conns_per_route, g.settings.speed_limit_kbps, c)
+            (g.settings.conns_per_route, g.settings.speed_limit_kbps, g.settings.proxy.clone(), c)
         };
         self.set_status(&item.id, Status::Downloading, None);
 
@@ -464,6 +520,7 @@ impl Manager {
         opts.conns_per_route = conns;
         opts.store = Some(self.store.clone());
         opts.speed_limit = (limit > 0).then(|| limit * 1024);
+        opts.proxy = item.proxy.clone().or_else(|| Some(global_proxy).filter(|p| !p.is_empty()));
         if let Some(c) = &item.checksum {
             match grabnr_core::Checksum::parse(c) {
                 Ok(sum) => opts.checksum = Some(sum),
@@ -612,7 +669,7 @@ mod tests {
     use super::*;
 
     fn item(id: &str, priority: i32, status: Status) -> Item {
-        Item { id: id.into(), url: format!("https://x/{id}"), filename: None, dir: ".".into(), headers: vec![], status, total: None, downloaded: 0, path: None, error: None, added: 0, checksum: None, priority, retries: 0 }
+        Item { id: id.into(), url: format!("https://x/{id}"), filename: None, dir: ".".into(), headers: vec![], status, total: None, downloaded: 0, path: None, error: None, added: 0, checksum: None, priority, retries: 0, proxy: None }
     }
 
     #[test]

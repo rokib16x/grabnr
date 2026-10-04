@@ -12,7 +12,8 @@ use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
 use crate::adapt::{is_slow_tail, Ramp};
-use crate::bind::{client_pooled, BindMode};
+use crate::auth::Auth;
+use crate::bind::{client_via_proxy, BindMode};
 use crate::checksum::{self, Checksum};
 use crate::disk;
 use crate::limiter::Limiter;
@@ -31,16 +32,18 @@ pub struct Route {
     pub mode: BindMode,
     /// Cap for this link in bytes per second, shared by all its connections.
     pub speed_limit: Option<u64>,
+    /// Most connections on this link; falls back to `Options::conns_per_route`. Lets a weak link carry a smaller share.
+    pub max_conns: Option<usize>,
 }
 
 impl Route {
     pub fn from_link(link: &Link) -> Self {
-        Route { name: link.name.clone(), link: Some(link.clone()), mode: BindMode::BoundIf, speed_limit: None }
+        Route { name: link.name.clone(), link: Some(link.clone()), mode: BindMode::BoundIf, speed_limit: None, max_conns: None }
     }
 
     /// Let the OS routing table decide (used for single-link downloads and tests).
     pub fn unbound(name: &str) -> Self {
-        Route { name: name.into(), link: None, mode: BindMode::None, speed_limit: None }
+        Route { name: name.into(), link: None, mode: BindMode::None, speed_limit: None, max_conns: None }
     }
 }
 
@@ -63,6 +66,10 @@ pub struct Options {
     pub adaptive: bool,
     /// How often the adaptive controller looks at link speeds.
     pub ramp_interval: Duration,
+    /// HTTP(S) or SOCKS5 proxy for every link, e.g. `socks5://127.0.0.1:1080`.
+    pub proxy: Option<String>,
+    /// Sent as the `Authorization` header (overrides one in `headers`).
+    pub auth: Option<Auth>,
 }
 
 impl Options {
@@ -80,6 +87,8 @@ impl Options {
             checksum: None,
             adaptive: true,
             ramp_interval: Duration::from_secs(2),
+            proxy: None,
+            auth: None,
         }
     }
 }
@@ -175,9 +184,13 @@ enum Outcome {
     Lost,
 }
 
-pub async fn download(opts: Options, cancel: CancellationToken, emit: Emit) -> Result<PathBuf> {
+pub async fn download(mut opts: Options, cancel: CancellationToken, emit: Emit) -> Result<PathBuf> {
     if opts.routes.is_empty() {
         return Err(Error::Other("no network routes selected".into()));
+    }
+    if let Some(a) = &opts.auth {
+        opts.headers.retain(|(k, _)| !k.eq_ignore_ascii_case("authorization"));
+        opts.headers.push(("Authorization".into(), a.header_value()));
     }
     let mut headers = HeaderMap::new();
     for (k, v) in &opts.headers {
@@ -186,7 +199,7 @@ pub async fn download(opts: Options, cancel: CancellationToken, emit: Emit) -> R
         headers.insert(name, val);
     }
     let clients: Vec<Client> =
-        opts.routes.iter().map(|r| client_pooled(r.link.as_ref(), r.mode)).collect::<std::result::Result<_, _>>()?;
+        opts.routes.iter().map(|r| client_via_proxy(r.link.as_ref(), r.mode, opts.proxy.as_deref())).collect::<std::result::Result<_, _>>()?;
 
     // Probe on the first route that answers; a dead link must not block the download.
     let mut probed: Option<(usize, Probe)> = None;
@@ -217,8 +230,8 @@ pub async fn download(opts: Options, cancel: CancellationToken, emit: Emit) -> R
             .map(|r| RouteState {
                 name: r.name.clone(),
                 bytes: AtomicU64::new(0),
-                allowed: AtomicUsize::new(Ramp::new(opts.conns_per_route, opts.adaptive).allowed),
-                ceiling: AtomicUsize::new(opts.conns_per_route.max(1)),
+                allowed: AtomicUsize::new(Ramp::new(max_conns(&opts, r), opts.adaptive).allowed),
+                ceiling: AtomicUsize::new(max_conns(&opts, r)),
                 speed: AtomicU64::new(0),
                 active: AtomicUsize::new(0),
                 last_throttle: Mutex::new(Instant::now() - Duration::from_secs(60)),
@@ -310,10 +323,10 @@ async fn ranged(
     });
 
     let ticker = spawn_ticker(shared.clone(), emit.clone());
-    let ramp = opts.adaptive.then(|| spawn_ramp(shared.clone(), opts.conns_per_route, opts.ramp_interval));
+    let ramp = opts.adaptive.then(|| spawn_ramp(shared.clone(), opts.routes.iter().map(|r| max_conns(opts, r)).collect(), opts.ramp_interval));
     let mut workers = Vec::new();
     for (r, client) in clients.iter().enumerate() {
-        for w in 0..opts.conns_per_route.max(1) {
+        for w in 0..max_conns(opts, &opts.routes[r]) {
             workers.push(tokio::spawn(worker(ctx.clone(), r, w, client.clone())));
         }
     }
@@ -637,9 +650,9 @@ fn slow_tail(ctx: &Ctx, route: usize) -> bool {
 }
 
 /// Every `interval`, let each link's connection count follow its measured speed.
-fn spawn_ramp(shared: Arc<Shared>, max_conns: usize, interval: Duration) -> tokio::task::JoinHandle<()> {
+fn spawn_ramp(shared: Arc<Shared>, max_per_route: Vec<usize>, interval: Duration) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let mut ramps: Vec<Ramp> = shared.routes.iter().map(|_| Ramp::new(max_conns, true)).collect();
+        let mut ramps: Vec<Ramp> = max_per_route.iter().map(|&m| Ramp::new(m, true)).collect();
         loop {
             tokio::time::sleep(interval).await;
             for (r, ramp) in shared.routes.iter().zip(ramps.iter_mut()) {
@@ -654,4 +667,8 @@ fn spawn_ramp(shared: Arc<Shared>, max_conns: usize, interval: Duration) -> toki
             }
         }
     })
+}
+
+fn max_conns(opts: &Options, r: &Route) -> usize {
+    r.max_conns.unwrap_or(opts.conns_per_route).max(1)
 }

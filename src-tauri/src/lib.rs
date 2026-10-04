@@ -21,6 +21,18 @@ struct LinksResponse {
     shared_gateways: Vec<(String, String)>,
 }
 
+/// Optional extras for one download. Credentials are stored with the download and never sent back to the UI.
+#[derive(serde::Deserialize, Default)]
+struct AddOptions {
+    filename: Option<String>,
+    dir: Option<String>,
+    checksum: Option<String>,
+    username: Option<String>,
+    password: Option<String>,
+    token: Option<String>,
+    proxy: Option<String>,
+}
+
 #[derive(Serialize)]
 struct AddResult {
     id: String,
@@ -49,7 +61,9 @@ fn get_state(m: Mgr) -> AppState {
 }
 
 #[tauri::command]
-fn add_download(m: Mgr, url: String, filename: Option<String>, dir: Option<String>, checksum: Option<String>) -> Result<AddResult, String> {
+fn add_download(m: Mgr, url: String, options: Option<AddOptions>) -> Result<AddResult, String> {
+    let o = options.unwrap_or_default();
+    let (filename, dir, checksum) = (o.filename, o.dir, o.checksum);
     let url = url.trim().to_string();
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err("Enter a full http:// or https:// link".into());
@@ -57,7 +71,19 @@ fn add_download(m: Mgr, url: String, filename: Option<String>, dir: Option<Strin
     if let Some(c) = checksum.as_deref().filter(|c| !c.trim().is_empty()) {
         grabnr_core::Checksum::parse(c).map_err(|e| e.to_string())?;
     }
-    let (id, duplicate) = m.inner().add(AddRequest { url, filename, headers: Vec::new(), dir, checksum });
+    let proxy = o.proxy.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+    if let Some(p) = &proxy {
+        if !["http://", "https://", "socks5://", "socks5h://"].iter().any(|s| p.starts_with(s)) {
+            return Err("The proxy must start with http://, https://, socks5:// or socks5h://".into());
+        }
+    }
+    let mut headers = Vec::new();
+    if let Some(t) = o.token.filter(|t| !t.trim().is_empty()) {
+        headers.push(("Authorization".to_string(), grabnr_core::Auth::Bearer(t.trim().to_string()).header_value()));
+    } else if let Some(user) = o.username.filter(|u| !u.is_empty()) {
+        headers.push(("Authorization".to_string(), grabnr_core::Auth::Basic { user, pass: o.password.unwrap_or_default() }.header_value()));
+    }
+    let (id, duplicate) = m.inner().add(AddRequest { url, filename, headers, dir, checksum, proxy });
     Ok(AddResult { id, duplicate })
 }
 

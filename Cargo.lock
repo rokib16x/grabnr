@@ -1608,6 +1608,7 @@ dependencies = [
 name = "grabnr-core"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "futures-util",
  "libc",
  "md-5",

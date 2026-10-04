@@ -29,19 +29,28 @@ impl BindMode {
 
 /// One-shot client (no connection reuse): used by probes and the spike.
 pub fn client_for(link: Option<&Link>, mode: BindMode) -> Result<reqwest::Client, reqwest::Error> {
-    build(link, mode, false)
+    build(link, mode, false, None)
 }
 
 /// Download client: keeps connections open from one chunk to the next.
 /// HTTP/1.1 only, because HTTP/2 would multiplex every worker onto one TCP connection.
 pub fn client_pooled(link: Option<&Link>, mode: BindMode) -> Result<reqwest::Client, reqwest::Error> {
-    build(link, mode, true)
+    build(link, mode, true, None)
 }
 
-fn build(link: Option<&Link>, mode: BindMode, pooled: bool) -> Result<reqwest::Client, reqwest::Error> {
+/// Like [`client_pooled`], going through an HTTP(S) or SOCKS5 proxy (`http://host:port`, `socks5://host:port`).
+/// The connection to the proxy is the one pinned to the link.
+pub fn client_via_proxy(link: Option<&Link>, mode: BindMode, proxy: Option<&str>) -> Result<reqwest::Client, reqwest::Error> {
+    build(link, mode, true, proxy)
+}
+
+fn build(link: Option<&Link>, mode: BindMode, pooled: bool, proxy: Option<&str>) -> Result<reqwest::Client, reqwest::Error> {
     let mut b = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(8))
         .user_agent(concat!("grabnr/", env!("CARGO_PKG_VERSION")));
+    if let Some(p) = proxy.map(str::trim).filter(|p| !p.is_empty()) {
+        b = b.proxy(reqwest::Proxy::all(p)?);
+    }
     b = if pooled { b.http1_only().pool_idle_timeout(Duration::from_secs(30)) } else { b.pool_max_idle_per_host(0) };
     if let Some(link) = link {
         match mode {

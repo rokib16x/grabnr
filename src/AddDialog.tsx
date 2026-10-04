@@ -8,6 +8,12 @@ export function AddDialog({ defaultDir, onClose }: { defaultDir?: string; onClos
   const [url, setUrl] = useState("");
   const [name, setName] = useState("");
   const [sum, setSum] = useState("");
+  const [more, setMore] = useState(false);
+  const [auth, setAuth] = useState<"none" | "basic" | "token">("none");
+  const [user, setUser] = useState("");
+  const [pass, setPass] = useState("");
+  const [token, setToken] = useState("");
+  const [proxy, setProxy] = useState("");
   const [dir, setDir] = useState(defaultDir ?? "");
   const [err, setErr] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -26,7 +32,15 @@ export function AddDialog({ defaultDir, onClose }: { defaultDir?: string; onClos
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     try {
-      const r = await api.add(url, name, dir === defaultDir ? undefined : dir, sum);
+      const r = await api.add(url, {
+        filename: name || undefined,
+        dir: dir === defaultDir ? undefined : dir,
+        checksum: sum || undefined,
+        username: auth === "basic" ? user : undefined,
+        password: auth === "basic" ? pass : undefined,
+        token: auth === "token" ? token : undefined,
+        proxy: proxy || undefined,
+      });
       if (r.duplicate) {
         setErr("This link is already in your list.");
         return;
@@ -62,6 +76,29 @@ export function AddDialog({ defaultDir, onClose }: { defaultDir?: string; onClos
           <span>Checksum</span>
           <input value={sum} onChange={(e) => { setSum(e.target.value); setErr(null); }} placeholder="Optional: SHA-256, SHA-1 or MD5" spellCheck={false} aria-label="Checksum" />
         </div>
+        <button type="button" className="ghost disclose" aria-expanded={more} onClick={() => setMore(!more)}>
+          <Icon name="chevron" size={12} className={more ? "open" : ""} />Sign-in and proxy
+        </button>
+        {more && (
+          <div className="advanced">
+            <div className="form-row">
+              <span>Sign in</span>
+              <select value={auth} onChange={(e) => setAuth(e.target.value as typeof auth)} aria-label="Sign-in type">
+                <option value="none">None</option>
+                <option value="basic">Username and password</option>
+                <option value="token">Bearer token</option>
+              </select>
+            </div>
+            {auth === "basic" && (
+              <>
+                <div className="form-row"><span>Username</span><input value={user} onChange={(e) => setUser(e.target.value)} autoComplete="off" spellCheck={false} aria-label="Username" /></div>
+                <div className="form-row"><span>Password</span><input type="password" value={pass} onChange={(e) => setPass(e.target.value)} autoComplete="off" aria-label="Password" /></div>
+              </>
+            )}
+            {auth === "token" && <div className="form-row"><span>Token</span><input type="password" value={token} onChange={(e) => setToken(e.target.value)} autoComplete="off" aria-label="Bearer token" /></div>}
+            <div className="form-row"><span>Proxy</span><input value={proxy} onChange={(e) => setProxy(e.target.value)} placeholder="socks5://127.0.0.1:1080" spellCheck={false} aria-label="Proxy" /></div>
+          </div>
+        )}
         <p className="hint">grabnr splits the file into chunks and pulls them over every connection you have enabled in Manage Connections.</p>
 
         {err && <p className="err" role="alert">{err}</p>}

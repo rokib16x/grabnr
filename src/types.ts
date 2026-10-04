@@ -16,6 +16,10 @@ export type Item = {
   retries: number;
 };
 
+export type LinkRule = { share_pct: number; limit_kbps: number };
+
+export type AddOptions = { filename?: string; dir?: string; checksum?: string; username?: string; password?: string; token?: string; proxy?: string };
+
 export type AddResult = { id: string; duplicate: boolean };
 
 export type RouteStat = { name: string; bytes: number; bytes_per_sec: number; connections: number };
@@ -36,6 +40,9 @@ export type Settings = {
   token: string;
   speed_limit_kbps: number;
   auto_retry: number;
+  link_rules: Record<string, LinkRule>;
+  skip_cellular: boolean;
+  proxy: string;
 };
 
 export type AppState = { downloads: Item[]; settings: Settings; api_port: number; api_ok: boolean };
