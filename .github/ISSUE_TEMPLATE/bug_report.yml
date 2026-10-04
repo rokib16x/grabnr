@@ -1,0 +1,27 @@
+name: Bug report
+description: Something does not work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what you saw instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: grabnr version and macOS version
+    validations:
+      required: true
+  - type: textarea
+    id: links
+    attributes:
+      label: Your connections
+      description: Output of `grabnr links` (leave out anything private). Say which links were enabled.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output or error message
+      render: text

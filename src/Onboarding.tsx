@@ -8,14 +8,8 @@ import type { AppState, LinksResponse } from "./types";
 export function Onboarding({ app, onDone }: { app: AppState; onDone: () => void }) {
   const [step, setStep] = useState(0);
   const [links, setLinks] = useState<LinksResponse | null>(null);
-  const [pairLeft, setPairLeft] = useState(0);
 
   useEffect(() => void api.links().then(setLinks), []);
-  useEffect(() => {
-    if (pairLeft <= 0) return;
-    const t = setTimeout(() => setPairLeft(pairLeft - 1), 1000);
-    return () => clearTimeout(t);
-  }, [pairLeft]);
 
   const finish = async () => {
     await api.setSettings({ onboarded: true });
@@ -46,9 +40,8 @@ export function Onboarding({ app, onDone }: { app: AppState; onDone: () => void 
     </>,
     <>
       <h2>Browser downloads</h2>
-      <p>Install the grabnr extension in Chrome, Brave or Edge so downloads start here instead of in the browser. Load the <code>extension</code> folder from the grabnr project in your browser's extensions page, then press Pair in its options.</p>
-      <p className={`check ${app.api_ok ? "ok" : "bad"}`}><Icon name={app.api_ok ? "check" : "alert"} />{app.api_ok ? `Ready on port ${app.api_port}.` : `Port ${app.api_port} is used by another program, so the extension cannot connect.`}</p>
-      <button disabled={!app.api_ok} onClick={async () => setPairLeft(await api.allowPairing())}>{pairLeft > 0 ? `Pairing open: ${pairLeft}s` : "Allow pairing (60 s)"}</button>
+      <p>Install the grabnr extension in Chrome, Brave or Edge so downloads start here instead of in the browser. Open the browser's extensions page, turn on developer mode, and load the <code>extension</code> folder from the grabnr project. There is nothing to pair: grabnr recognises its own extension.</p>
+      <p className={`check ${app.api_ok ? "ok" : "bad"}`}><Icon name={app.api_ok ? "check" : "alert"} />{app.api_ok ? `Ready for the extension on port ${app.api_port}.` : `Port ${app.api_port} is used by another program, so the extension cannot connect.`}</p>
     </>,
     <>
       <h2>Lives in the menu bar</h2>

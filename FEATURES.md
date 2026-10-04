@@ -1,86 +1,98 @@
 # grabnr features
 
+`[x]` built and covered by tests or checked in the app, `[~]` partly built, `[ ]` not started.
+Anything marked built has not yet been proven on two real links with different gateways; see README.
+
 ## 1. Network and interfaces
-- Discover Wi-Fi, Ethernet, USB/phone tethering, Thunderbolt/USB Ethernet and cellular dongles
-- Per-interface IP, gateway, type, link speed, signal and status
-- Enable/disable and weight per interface
-- Bind sockets to an interface (`IP_BOUND_IF`), IPv4 and IPv6
-- Verify the bind works; label `BOUND` or `MULTI_CONNECTION`
-- Detect interfaces sharing a gateway or ISP and warn that they won't add bandwidth
-- Detect VPN/virtual interfaces and allow excluding them
-- Built-in per-interface speed test
-- Hot-plug: new links join a running download, removed links drain safely
-- Sleep/wake, IP change and Wi-Fi roaming recovery
-- Metered-connection awareness and per-interface data caps
-- Per-interface rules (for example never use cellular, prefer Ethernet)
+- [x] Discover Wi-Fi, Ethernet, USB/phone tethering and cellular links, with IP, gateway and type
+- [~] Link speed and signal strength (link speed when the OS reports it; no signal strength)
+- [x] Enable/disable links; per-link share of connections and per-link speed limit
+- [x] Bind sockets to an interface (`IP_BOUND_IF`), IPv4 (IPv6 not yet)
+- [x] Detect links sharing a gateway and warn that they will not add bandwidth
+- [x] Exclude VPN/tunnel links by default
+- [x] Per-link speed test (`spike`) and in-app link test
+- [x] Hot-plug: new links join a running download, vanished links drain, changed IPs restart the link
+- [x] Recover from sleep/wake and dead connections (stall timeout, link revival)
+- [~] Rules: leave cellular out unless ticked, per-link caps. No "prefer Ethernet" ordering yet
+- [ ] Metered-connection awareness and per-link data caps (macOS gives no reliable signal)
 
 ## 2. Download engine
-- HTTP/HTTPS (HTTP/1.1, HTTP/2), FTP, SFTP
-- Range probe with single-connection fallback
-- Adaptive 1-8 MB chunks, shared work-stealing queue
-- Multiple persistent connections per interface, grown and shrunk automatically
-- Tail racing: duplicate the slowest chunks, first copy wins
-- Slow-link protection: a mismatched link cannot drag the total below the best single link
-- Retry with exponential backoff; back off on 429/503/403
-- Preallocated file, writes at offsets, atomic rename on completion
-- Redirects, `Content-Disposition` filenames
-- Auth (Basic, Bearer), headers, cookies, referrer, user agent
-- HTTP and SOCKS proxies, per download
-- Mirrors and Metalink
-- Batch URL lists and page link grabber
-- HLS/DASH streams
-- BitTorrent and magnet links over multiple interfaces, selective files
-- Folder/archive downloads with optional auto-extract
+- [x] HTTP/HTTPS over HTTP/1.1 (HTTP/2 is avoided on purpose: it would put every worker on one TCP connection)
+- [ ] FTP, SFTP (needs a client that uses interface-bound sockets)
+- [x] Range probe with single-connection fallback
+- [x] 1-8 MB chunks, shared work-stealing queue
+- [x] Persistent connections per link, grown and shrunk automatically
+- [x] Tail racing: duplicate the slowest chunk, first copy wins
+- [x] Slow-link protection: a much slower link stays out of the last chunks
+- [x] Retry with exponential backoff; back off on 429/503/403
+- [x] Preallocated file, writes at offsets, atomic rename on completion
+- [x] Redirects, `Content-Disposition` filenames
+- [x] Basic and Bearer auth, custom headers, cookies and referrer (from the browser extension)
+- [x] HTTP, HTTPS and SOCKS5 proxies, per download and as a default
+- [x] Mirrors and Metalink (`.meta4`, `.metalink`)
+- [x] Batch URL lists and a page link grabber
+- [ ] HLS/DASH streams
+- [ ] BitTorrent and magnet links
+- [ ] Folder/archive downloads with auto-extract
 
 ## 3. Reliability and integrity
-- Pause/resume across quit and crash, state in SQLite
-- ETag/Last-Modified check; refuse to resume if the file changed
-- SHA-256/SHA-1/MD5 verification, typed in or from the server
-- Per-chunk verification and re-download
-- Disk-space check, temp-file cleanup, repair/re-verify
+- [x] Pause/resume across quit and crash, state in SQLite
+- [x] ETag/Last-Modified check; a changed file discards the partial download
+- [x] SHA-256 / SHA-1 / MD5 verification, typed in or from a Metalink file
+- [ ] Per-chunk verification and repair/re-verify
+- [x] Disk-space check before starting; partial-file cleanup on delete
 
 ## 4. Queue and scheduling
-- Priorities and reordering, concurrent download limit
-- Overall and per-interface speed limits
-- Time-of-day scheduler and bandwidth profiles
-- On-complete actions (quit, sleep, shut down, run script)
-- Auto-retry failed downloads, duplicate detection
+- [x] Concurrent download limit, "Download next / last" priority
+- [x] Overall and per-link speed limits
+- [x] Automatic retry of failed downloads, with growing delays
+- [x] Duplicate detection
+- [ ] Drag-to-reorder
+- [ ] Time-of-day scheduler and bandwidth profiles
+- [ ] On-complete actions (quit, sleep, run a script)
 
 ## 5. User interface
-- Download list: progress, speed, ETA, size, per-interface share
-- Chunk grid coloured by interface
-- Live speed graph per interface
-- Detail view with connections and log
-- Sort, filter, search, categories
-- Drag-and-drop links/files, clipboard URL detection
-- Menu bar icon with live speed, Dock progress
-- Light/dark, notifications, sounds, shortcuts, command palette
-- Onboarding with setup checks
-- Localization
+- [x] macOS-style window: sidebar, download list, inspector, translucent sidebar, light and dark
+- [x] Per-download progress, speed, ETA, size and per-link share bar
+- [x] Chunk map coloured by link; live speed graph per link
+- [x] Search, status filters, file-type categories, sorting
+- [x] Drag and drop of links and text files; clipboard link detection; paste to add
+- [x] Menu bar icon with live speed and a popover with active downloads
+- [x] Dock progress and badge, notifications with optional sound
+- [x] Command palette (⌘K), shortcuts (⌘N, ⌘,)
+- [x] First-run onboarding with setup checks
+- [x] History and statistics (bytes per link, estimated time saved), CSV export
+- [ ] Video and image thumbnails
+- [ ] Localization
 
 ## 6. macOS integration
-- Browser extensions (Chrome, Safari, Firefox)
-- URL scheme handler, Share Sheet extension, Finder context menu
-- Spotlight, quarantine attribute handling, launch at login
-- Signed and notarized builds, auto-update
+- [x] Chrome/Brave/Edge extension
+- [ ] Safari and Firefox extensions
+- [x] Launch at login (starts hidden in the menu bar)
+- [ ] URL scheme handler, Share Sheet extension, Finder context menu
+- [ ] Quarantine attribute handling
+- [~] Release workflow builds the app; signing and notarization need an Apple Developer account
+- [ ] Auto-update
 
 ## 7. Automation and developer features
-- CLI on the same engine
-- Local REST and WebSocket API
-- Event hooks and webhooks
-- Queue/settings import and export
-- Logs, diagnostics export, debug panel
+- [x] CLI on the same engine (`links`, `get`, `spike`)
+- [x] Local REST API for the extension, bound to 127.0.0.1
+- [ ] WebSocket events, event hooks, webhooks
+- [ ] Queue/settings import and export
+- [ ] Diagnostics export and debug panel
 
-## 8. History and data
-- Searchable history, statistics (bytes per interface, time saved), CSV export
+## 8. Security and privacy
+- [x] No telemetry
+- [x] TLS validation through rustls
+- [x] Credentials kept in a 0600 file, never sent to the UI
+- [ ] Credentials in the macOS Keychain
 
-## 9. Security and privacy
-- No telemetry by default
-- TLS validation with clear errors
-- Credentials in the macOS Keychain
-- Sandbox-friendly design
+## 9. Quality
+- [x] Unit tests, local range-server integration tests (mirrors, auth, proxy, hot-plug, stalls)
+- [x] CI: format, clippy, tests on macOS/Linux, UI type-check and tests
+- [ ] UI end-to-end tests
+- [ ] Installer under about 15 MB and under 100 MB RAM idle: not measured yet
 
-## 10. Quality goals
-- Installer under about 15 MB, under 100 MB RAM idle
-- Scheduler unit tests, local range-server integration tests, UI end-to-end tests
-- CI for build, test, sign, release
+## 10. Platforms
+- [x] macOS (Apple silicon and Intel)
+- [~] Linux and Windows: the engine builds in CI; interface binding is only proven on macOS

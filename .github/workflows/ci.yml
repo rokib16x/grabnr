@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The download engine and CLI have no GUI dependencies, so they are tested on every platform.
+  engine:
+    name: Engine (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # Windows is not supported yet: it is built here to catch breakage early without blocking merges.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+        if: matrix.os == 'ubuntu-latest'
+      - run: cargo clippy -p grabnr-core -p grabnr-cli --all-targets -- -D warnings
+      - run: cargo test -p grabnr-core -p grabnr-cli
+
+  # The desktop app: Rust side must compile and its tests pass, and the UI must type-check, test and build.
+  app:
+    name: Desktop app (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build
+      - run: cargo clippy -p grabnr --all-targets -- -D warnings
+      - run: cargo test -p grabnr
