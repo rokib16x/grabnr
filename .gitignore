@@ -29,3 +29,6 @@ target
 # Playwright
 test-results
 playwright-report
+
+# Extension build output
+extension/dist

@@ -1,9 +1,7 @@
 # grabnr browser extension
 
 Manifest V3 extension that hands browser downloads to the grabnr desktop
-download manager. Chrome, Brave and Edge only for now (the manifest carries a
-`browser_specific_settings` block for a possible Firefox port, but Firefox is
-not supported or tested).
+download manager. Works in Chrome, Brave, Edge and Firefox (140 or newer).
 
 ## Install (unpacked)
 
@@ -11,6 +9,20 @@ not supported or tested).
 2. Open `chrome://extensions` (Brave: `brave://extensions`, Edge: `edge://extensions`).
 3. Enable **Developer mode**.
 4. Click **Load unpacked** and select this `extension/` folder.
+
+## Firefox
+
+```bash
+npm run build:extension      # writes extension/dist/grabnr-firefox.zip (and the Chrome zip)
+```
+
+1. Open `about:debugging#/runtime/this-firefox` and choose **Load Temporary Add-on**, then pick
+   `extension/dist/firefox/manifest.json`. (A permanent install needs the add-on to be signed by Mozilla;
+   Firefox Developer Edition and Nightly can install the zip unsigned.)
+2. In the add-on's options, press **Grant site access**.
+3. In the grabnr app press **Allow pairing**, then press **Pair** in the options. Firefox gives each
+   install its own random address, so unlike Chrome it cannot be recognised automatically and needs this
+   one-time pairing.
 
 ## Connecting
 

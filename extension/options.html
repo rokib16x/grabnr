@@ -14,8 +14,13 @@
 <p class="hint">Nothing to set up: grabnr recognises this extension automatically. Just keep the grabnr app running.</p>
 <button id="test">Test connection</button>
 <div id="msg"></div>
-<details>
-  <summary class="hint">Advanced: token for unofficial builds</summary>
+<div id="firefox" hidden>
+  <p><b>Firefox needs two one-time steps.</b> Grant site access below, then pair: press Allow pairing in the grabnr app and click Pair.</p>
+  <p id="access-state" class="hint"></p>
+  <button id="grant">Grant site access</button>
+</div>
+<details id="adv">
+  <summary class="hint">Advanced: token for unofficial builds and Firefox</summary>
   <p class="hint">Only needed if you loaded a modified copy of this extension. In grabnr, press Allow pairing, then Pair here, or paste the token.</p>
   <button id="pair">Pair</button>
   <p><label>Token<br><input type="password" id="token" autocomplete="off"></label></p>

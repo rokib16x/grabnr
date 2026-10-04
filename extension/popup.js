@@ -11,7 +11,7 @@ async function refresh() {
   const r = await checkToken(s.token);
   el.textContent = r === 'ok' ? 'Connected' : 'Running, but not authorised';
   el.className = r === 'ok' ? 'ok' : 'warn';
-  $('msg').textContent = r === 'ok' ? '' : 'This build of the extension is not recognised. Open Options to enter a token.';
+  $('msg').textContent = r === 'ok' ? '' : (/Firefox\//.test(navigator.userAgent) ? 'Open Options to pair with grabnr (one time).' : 'This build of the extension is not recognised. Open Options to enter a token.');
 }
 
 $('enabled').addEventListener('change', async (e) => {

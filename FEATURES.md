@@ -70,7 +70,7 @@ Anything marked built has not yet been proven on two real links with different g
 
 ## 6. macOS integration
 - [x] Chrome/Brave/Edge extension
-- [ ] Safari and Firefox extensions
+- [x] Firefox extension (built from the same source; one-time pairing). No Safari extension yet
 - [x] Launch at login (starts hidden in the menu bar)
 - [~] `grabnr://add?url=` links (works in the packaged app; not testable in dev). No Share Sheet extension or Finder menu yet
 - [x] Quarantine attribute on finished files (setting, on by default)

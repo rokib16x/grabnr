@@ -501,8 +501,31 @@ impl Manager {
         true
     }
 
+    /// A failed download whose link has probably expired and that this new link replaces: same site and path, only the
+    /// query (a signature or token) differs, and the old attempt ended with an authorization error.
+    pub fn relink_target(items: &[Item], new_url: &str, new_filename: Option<&str>) -> Option<String> {
+        let (host, path) = split_url(new_url)?;
+        items.iter().find_map(|i| {
+            let (h, p) = split_url(&i.url)?;
+            let expired =
+                i.status == Status::Error && i.error.as_deref().is_some_and(|e| ["401", "403", "410"].iter().any(|c| e.contains(c)));
+            let same_file = match (new_filename, i.filename.as_deref()) {
+                (Some(a), Some(b)) => a == b,
+                _ => true,
+            };
+            (expired && h == host && p == path && i.url != new_url && same_file).then(|| i.id.clone())
+        })
+    }
+
     /// Add a download. A link already in the list is not added twice: the existing one is returned (and restarted if it had failed or paused).
     pub fn add(self: &Arc<Self>, req: AddRequest) -> (String, bool) {
+        let relink = Self::relink_target(&self.inner.lock().unwrap().items, &req.url, req.filename.as_deref());
+        if let Some(id) = relink {
+            // The browser handed over a fresh link for a download that failed with an expired one: carry on with it.
+            if self.update_link(&id, &req.url).is_ok() {
+                return (id, true);
+            }
+        }
         let dup = {
             let g = self.inner.lock().unwrap();
             g.items
@@ -1181,6 +1204,12 @@ fn pick_next(
         .map(|(_, i)| i.clone())
 }
 
+/// Host and path of a link (the query and fragment are ignored), lowercased where the standard says it does not matter.
+fn split_url(u: &str) -> Option<(String, String)> {
+    let u = url::Url::parse(u).ok()?;
+    Some((u.host_str()?.to_ascii_lowercase(), u.path().to_string()))
+}
+
 /// ffmpeg, if installed: on the PATH or in the usual Homebrew locations (an app started from the Dock has a short PATH).
 pub fn find_ffmpeg() -> Option<PathBuf> {
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
@@ -1232,6 +1261,28 @@ mod tests {
         retry.insert("wait".to_string(), now + Duration::from_secs(30));
         assert_eq!(pick_next(&items, &HashMap::new(), &retry, now).unwrap().id, "ok");
         assert!(pick_next(&items, &HashMap::new(), &retry, now + Duration::from_secs(31)).unwrap().id == "wait");
+    }
+
+    #[test]
+    fn a_fresh_link_replaces_an_expired_one_only_when_it_is_clearly_the_same_file() {
+        let mut old = item("old", 0, Status::Error);
+        old.url = "https://cdn.example/dl/file.zip?sig=old".into();
+        old.error = Some("server returned HTTP 403".into());
+        old.filename = Some("file.zip".into());
+        let items = vec![old.clone()];
+        let new = "https://cdn.example/dl/file.zip?sig=new";
+        assert_eq!(Manager::relink_target(&items, new, Some("file.zip")).as_deref(), Some("old"));
+        assert_eq!(Manager::relink_target(&items, new, None).as_deref(), Some("old"), "no file name given: path match is enough");
+        assert!(Manager::relink_target(&items, new, Some("other.zip")).is_none(), "a different file name is a different download");
+        assert!(Manager::relink_target(&items, "https://cdn.example/dl/other.zip?sig=new", None).is_none(), "different path");
+        assert!(Manager::relink_target(&items, "https://evil.example/dl/file.zip?sig=new", None).is_none(), "different host");
+        assert!(Manager::relink_target(&items, &old.url, None).is_none(), "the very same link is just a duplicate");
+        let mut paused = old.clone();
+        paused.status = Status::Paused;
+        assert!(Manager::relink_target(&[paused], new, None).is_none(), "only failed downloads are relinked");
+        let mut notfound = old;
+        notfound.error = Some("server returned HTTP 404".into());
+        assert!(Manager::relink_target(&[notfound], new, None).is_none(), "a 404 is not an expired link");
     }
 
     #[test]
