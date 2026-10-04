@@ -12,7 +12,11 @@ export type Item = {
   error: string | null;
   added: number;
   checksum: string | null;
+  priority: number;
+  retries: number;
 };
+
+export type AddResult = { id: string; duplicate: boolean };
 
 export type RouteStat = { name: string; bytes: number; bytes_per_sec: number; connections: number };
 
@@ -31,6 +35,7 @@ export type Settings = {
   max_active: number;
   token: string;
   speed_limit_kbps: number;
+  auto_retry: number;
 };
 
 export type AppState = { downloads: Item[]; settings: Settings; api_port: number; api_ok: boolean };

@@ -22,6 +22,13 @@ struct LinksResponse {
 }
 
 #[derive(Serialize)]
+struct AddResult {
+    id: String,
+    /// The link was already in the list, so nothing new was added.
+    duplicate: bool,
+}
+
+#[derive(Serialize)]
 struct AppState {
     downloads: Vec<ItemView>,
     settings: Settings,
@@ -42,7 +49,7 @@ fn get_state(m: Mgr) -> AppState {
 }
 
 #[tauri::command]
-fn add_download(m: Mgr, url: String, filename: Option<String>, dir: Option<String>, checksum: Option<String>) -> Result<String, String> {
+fn add_download(m: Mgr, url: String, filename: Option<String>, dir: Option<String>, checksum: Option<String>) -> Result<AddResult, String> {
     let url = url.trim().to_string();
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err("Enter a full http:// or https:// link".into());
@@ -50,7 +57,13 @@ fn add_download(m: Mgr, url: String, filename: Option<String>, dir: Option<Strin
     if let Some(c) = checksum.as_deref().filter(|c| !c.trim().is_empty()) {
         grabnr_core::Checksum::parse(c).map_err(|e| e.to_string())?;
     }
-    Ok(m.inner().add(AddRequest { url, filename, headers: Vec::new(), dir, checksum }))
+    let (id, duplicate) = m.inner().add(AddRequest { url, filename, headers: Vec::new(), dir, checksum });
+    Ok(AddResult { id, duplicate })
+}
+
+#[tauri::command]
+fn move_download(m: Mgr, id: String, to_front: bool) {
+    m.inner().move_item(&id, to_front);
 }
 
 #[tauri::command]
@@ -278,6 +291,7 @@ pub fn run() {
             get_links,
             get_state,
             add_download,
+            move_download,
             pause_download,
             resume_download,
             remove_download,

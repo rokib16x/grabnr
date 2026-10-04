@@ -36,7 +36,7 @@ export function ProgressBar({ item, live, thin }: { item: Item; live?: Live; thi
 export function statusLine(item: Item, downloaded: number, speed: number) {
   const size = item.total ? `${bytes(downloaded)} of ${bytes(item.total)}` : bytes(downloaded);
   if (item.status === "downloading") return `${size} · ${rate(speed)}${item.total && speed ? ` · ${eta(item.total - downloaded, speed)} left` : ""}`;
-  if (item.status === "queued") return "Waiting to start";
+  if (item.status === "queued") return item.error ?? "Waiting to start";
   if (item.status === "paused") return `${item.total ? bytes(item.total) : bytes(downloaded)} · Paused`;
   if (item.status === "error") return item.error ?? "Failed";
   return `${item.total ? bytes(item.total) : bytes(downloaded)} · Completed`;
@@ -67,6 +67,7 @@ export function DownloadRow({ item, live, selected, onSelect }: { item: Item; li
         <MoreMenu
           items={[
             ...(item.status === "done" ? [{ label: "Open", onClick: () => api.open(item.id) }, { label: "Show in Finder", onClick: () => api.reveal(item.id) }] : []),
+            ...(item.status === "queued" || item.status === "paused" ? [{ label: "Download next", onClick: () => api.move(item.id, true) }, { label: "Download last", onClick: () => api.move(item.id, false) }] : []),
             { label: "Copy link", onClick: () => void navigator.clipboard?.writeText(item.url) },
             "sep",
             { label: "Remove from list", onClick: () => api.remove(item.id, false) },

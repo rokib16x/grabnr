@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { mock } from "./mock";
-import type { AppState, EngineEvent, Item, LinksResponse, Settings, SpikeReport } from "./types";
+import type { AddResult, AppState, EngineEvent, Item, LinksResponse, Settings, SpikeReport } from "./types";
 
 const native = "__TAURI_INTERNALS__" in window;
 const call = <T,>(cmd: string, args?: Record<string, unknown>) => (native ? invoke<T>(cmd, args) : (mock.call(cmd, args) as Promise<T>));
@@ -10,11 +10,12 @@ const call = <T,>(cmd: string, args?: Record<string, unknown>) => (native ? invo
 export const api = {
   state: () => call<AppState>("get_state"),
   links: () => call<LinksResponse>("get_links"),
-  add: (url: string, filename?: string, dir?: string, checksum?: string) => call<string>("add_download", { url, filename: filename || null, dir: dir || null, checksum: checksum || null }),
+  add: (url: string, filename?: string, dir?: string, checksum?: string) => call<AddResult>("add_download", { url, filename: filename || null, dir: dir || null, checksum: checksum || null }),
   pauseAll: () => call<void>("pause_all"),
   resumeAll: () => call<void>("resume_all"),
   quit: () => call<void>("quit_app"),
   showMain: (settings = false) => call<void>("show_main_window", { settings }),
+  move: (id: string, toFront: boolean) => call<void>("move_download", { id, toFront }),
   pause: (id: string) => call<void>("pause_download", { id }),
   resume: (id: string) => call<void>("resume_download", { id }),
   remove: (id: string, deleteFiles: boolean) => call<void>("remove_download", { id, deleteFiles }),

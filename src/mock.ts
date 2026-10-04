@@ -5,12 +5,12 @@ type Handlers = { item: (i: Item) => void; removed: (id: string) => void; event:
 
 let handlers: Handlers | null = null;
 const items: Item[] = [];
-const settings: Settings = { dest_dir: "/Users/you/Downloads", enabled_links: null, conns_per_route: 8, max_active: 3, speed_limit_kbps: 0, token: "d3adbeefcafe0123456789abcdef0123456789abcd" };
+const settings: Settings = { dest_dir: "/Users/you/Downloads", enabled_links: null, conns_per_route: 8, max_active: 3, speed_limit_kbps: 0, auto_retry: 3, token: "d3adbeefcafe0123456789abcdef0123456789abcd" };
 const timers = new Map<string, number>();
 let autostart = false;
 
 function seed(name: string, total: number, status: Item["status"], downloaded: number): Item {
-  const it: Item = { id: Math.random().toString(16).slice(2, 10), url: `https://example.com/files/${name}`, filename: name, dir: settings.dest_dir, status, total, downloaded, path: status === "done" ? `${settings.dest_dir}/${name}` : null, error: null, added: Date.now() / 1000, checksum: null };
+  const it: Item = { id: Math.random().toString(16).slice(2, 10), url: `https://example.com/files/${name}`, filename: name, dir: settings.dest_dir, status, total, downloaded, path: status === "done" ? `${settings.dest_dir}/${name}` : null, error: null, added: Date.now() / 1000, checksum: null, priority: 0, retries: 0 };
   items.unshift(it);
   return it;
 }
@@ -80,11 +80,14 @@ export const mock = {
           shared_gateways: [],
         } satisfies LinksResponse;
       case "add_download": {
+        const dup = items.find((i) => i.url.endsWith("/" + String(args.url).split("/").pop()) && i.url === args.url);
+        if (dup) return { id: dup.id, duplicate: true };
         const it = seed(String(args.url).split("/").pop() || "download", 600e6, "queued", 0);
         handlers?.item({ ...it });
         setTimeout(() => run(it), 300);
-        return it.id;
+        return { id: it.id, duplicate: false };
       }
+      case "move_download": { const it = items.find((i) => i.id === args.id); if (it) { it.priority += args.toFront ? 1 : -1; handlers?.item({ ...it }); } return; }
       case "pause_download": { const it = items.find((i) => i.id === args.id); if (it) { clearInterval(timers.get(it.id)); it.status = "paused"; handlers?.item({ ...it }); } return; }
       case "resume_download": { const it = items.find((i) => i.id === args.id); if (it) run(it); return; }
       case "remove_download": { const k = items.findIndex((i) => i.id === args.id); if (k >= 0) items.splice(k, 1); handlers?.removed(String(args.id)); return; }

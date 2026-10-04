@@ -41,6 +41,12 @@ pub struct Item {
     /// Expected hash (`sha256:<hex>` etc.) the finished file is verified against.
     #[serde(default)]
     pub checksum: Option<String>,
+    /// Higher starts first; ties go to the older download.
+    #[serde(default)]
+    pub priority: i32,
+    /// Automatic retries used so far (reset on success or a manual resume).
+    #[serde(default)]
+    pub retries: u32,
 }
 
 #[derive(Serialize, Clone)]
@@ -56,6 +62,8 @@ pub struct ItemView {
     pub error: Option<String>,
     pub added: u64,
     pub checksum: Option<String>,
+    pub priority: i32,
+    pub retries: u32,
 }
 
 impl From<&Item> for ItemView {
@@ -72,6 +80,8 @@ impl From<&Item> for ItemView {
             error: i.error.clone(),
             added: i.added,
             checksum: i.checksum.clone(),
+            priority: i.priority,
+            retries: i.retries,
         }
     }
 }
@@ -87,6 +97,13 @@ pub struct Settings {
     /// Total download speed cap in KB/s across all links; 0 means unlimited.
     #[serde(default)]
     pub speed_limit_kbps: u64,
+    /// Times a failed download is retried automatically (with growing delays); 0 turns it off.
+    #[serde(default = "default_auto_retry")]
+    pub auto_retry: u32,
+}
+
+fn default_auto_retry() -> u32 {
+    3
 }
 
 #[derive(Deserialize)]
@@ -96,6 +113,7 @@ pub struct SettingsPatch {
     pub conns_per_route: Option<usize>,
     pub max_active: Option<usize>,
     pub speed_limit_kbps: Option<u64>,
+    pub auto_retry: Option<u32>,
 }
 
 pub struct AddRequest {
@@ -114,6 +132,8 @@ struct Inner {
     /// Ids being removed, so a cancel is not reported as "paused".
     removing: Vec<String>,
     speeds: HashMap<String, f64>,
+    /// Failed downloads waiting out their retry delay.
+    retry_at: HashMap<String, Instant>,
 }
 
 pub struct Manager {
@@ -162,6 +182,7 @@ impl Manager {
                 max_active: 3,
                 token: random_hex(24),
                 speed_limit_kbps: 0,
+                auto_retry: default_auto_retry(),
             });
         let mut items: Vec<Item> =
             std::fs::read(data_dir.join("downloads.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
@@ -175,7 +196,7 @@ impl Manager {
             app,
             data_dir,
             store,
-            inner: Mutex::new(Inner { items, settings, cancels: HashMap::new(), removing: Vec::new(), speeds: HashMap::new() }),
+            inner: Mutex::new(Inner { items, settings, cancels: HashMap::new(), removing: Vec::new(), speeds: HashMap::new(), retry_at: HashMap::new() }),
             pairing_until: Mutex::new(None),
             api_ok: Mutex::new(false),
         });
@@ -219,6 +240,9 @@ impl Manager {
             if let Some(v) = p.speed_limit_kbps {
                 g.settings.speed_limit_kbps = v;
             }
+            if let Some(v) = p.auto_retry {
+                g.settings.auto_retry = v.min(10);
+            }
         }
         self.persist();
     }
@@ -242,7 +266,18 @@ impl Manager {
         true
     }
 
-    pub fn add(self: &Arc<Self>, req: AddRequest) -> String {
+    /// Add a download. A link already in the list is not added twice: the existing one is returned (and restarted if it had failed or paused).
+    pub fn add(self: &Arc<Self>, req: AddRequest) -> (String, bool) {
+        let dup = {
+            let g = self.inner.lock().unwrap();
+            g.items.iter().find(|i| i.url == req.url && i.dir == req.dir.clone().unwrap_or_else(|| g.settings.dest_dir.clone())).map(|i| (i.id.clone(), i.status))
+        };
+        if let Some((id, status)) = dup {
+            if matches!(status, Status::Paused | Status::Error) {
+                self.resume(&id);
+            }
+            return (id, true);
+        }
         let id = random_hex(8);
         {
             let mut g = self.inner.lock().unwrap();
@@ -262,13 +297,15 @@ impl Manager {
                     error: None,
                     added: now(),
                     checksum: req.checksum.filter(|c| !c.trim().is_empty()),
+                    priority: 0,
+                    retries: 0,
                 },
             );
         }
         self.persist();
         self.emit_item(&id);
         self.pump();
-        id
+        (id, false)
     }
 
     pub fn pause(&self, id: &str) {
@@ -283,6 +320,13 @@ impl Manager {
     }
 
     pub fn resume(self: &Arc<Self>, id: &str) {
+        {
+            let mut g = self.inner.lock().unwrap();
+            g.retry_at.remove(id);
+            if let Some(i) = g.items.iter_mut().find(|i| i.id == id) {
+                i.retries = 0;
+            }
+        }
         self.set_status(id, Status::Queued, None);
         self.pump();
     }
@@ -314,6 +358,20 @@ impl Manager {
     pub fn summary(&self) -> (usize, f64) {
         let g = self.inner.lock().unwrap();
         (g.cancels.len(), g.speeds.values().sum())
+    }
+
+    /// Make a queued download start next (or last) by changing its priority.
+    pub fn move_item(self: &Arc<Self>, id: &str, to_front: bool) {
+        {
+            let mut g = self.inner.lock().unwrap();
+            let (hi, lo) = (g.items.iter().map(|i| i.priority).max().unwrap_or(0), g.items.iter().map(|i| i.priority).min().unwrap_or(0));
+            if let Some(i) = g.items.iter_mut().find(|i| i.id == id) {
+                i.priority = if to_front { hi + 1 } else { lo - 1 };
+            }
+        }
+        self.persist();
+        self.emit_item(id);
+        self.pump();
     }
 
     pub fn pause_all(&self) {
@@ -366,7 +424,7 @@ impl Manager {
                 if active >= g.settings.max_active {
                     None
                 } else {
-                    g.items.iter().rev().find(|i| i.status == Status::Queued && !g.cancels.contains_key(&i.id)).cloned()
+                    pick_next(&g.items, &g.cancels, &g.retry_at, Instant::now())
                 }
             };
             let Some(item) = next else { return };
@@ -455,6 +513,27 @@ impl Manager {
         let _ = self.app.emit("download-event", serde_json::json!({ "id": id, "event": e }));
     }
 
+    /// Decide whether a failure should be retried; returns the wait before the next attempt.
+    fn schedule_retry(&self, id: &str, e: &grabnr_core::Error, msg: &str) -> Option<Duration> {
+        if !is_transient(e) {
+            return None;
+        }
+        let delay = {
+            let mut g = self.inner.lock().unwrap();
+            let max = g.settings.auto_retry;
+            let item = g.items.iter_mut().find(|i| i.id == id)?;
+            if item.retries >= max {
+                return None;
+            }
+            item.retries += 1;
+            let d = retry_delay(item.retries);
+            g.retry_at.insert(id.to_string(), Instant::now() + d);
+            d
+        };
+        self.set_status(id, Status::Queued, Some(format!("{msg}. Retrying in {}s", delay.as_secs())));
+        Some(delay)
+    }
+
     fn finish(self: &Arc<Self>, id: &str, res: grabnr_core::Result<PathBuf>) {
         let removed = {
             let mut g = self.inner.lock().unwrap();
@@ -471,6 +550,7 @@ impl Manager {
                         if let Some(i) = g.items.iter_mut().find(|i| i.id == id) {
                             i.path = Some(path.display().to_string());
                             i.filename = Some(name.clone());
+                            i.retries = 0;
                             if let Some(t) = i.total {
                                 i.downloaded = t;
                             }
@@ -482,11 +562,87 @@ impl Manager {
                 Err(grabnr_core::Error::Cancelled) => self.set_status(id, Status::Paused, None),
                 Err(e) => {
                     let msg = e.to_string();
+                    if let Some(delay) = self.schedule_retry(id, &e, &msg) {
+                        // Show why it failed while it waits; the status stays Queued so it is not shown as failed.
+                        let me = self.clone();
+                        tauri::async_runtime::spawn(async move {
+                            tokio::time::sleep(delay).await;
+                            me.pump();
+                        });
+                        self.pump();
+                        return;
+                    }
                     self.set_status(id, Status::Error, Some(msg.clone()));
                     let _ = self.app.notification().builder().title("Download failed").body(msg).show();
                 }
             }
         }
         self.pump();
+    }
+}
+
+/// Errors worth another try: network trouble, server overload, or a corrupt transfer.
+fn is_transient(e: &grabnr_core::Error) -> bool {
+    use grabnr_core::Error::*;
+    match e {
+        Http(_) | AllFailed(_) | ChecksumMismatch { .. } | FileChanged => true,
+        Status(s) => *s >= 500 || *s == 429 || *s == 408,
+        Io(_) | Db(_) | Cancelled | DiskFull { .. } | Other(_) => false,
+    }
+}
+
+/// 10 s, 30 s, 90 s … capped at 10 minutes.
+fn retry_delay(attempt: u32) -> Duration {
+    Duration::from_secs((10u64 * 3u64.pow(attempt.saturating_sub(1).min(5))).min(600))
+}
+
+/// Highest priority first, then oldest; skips anything already running or still waiting out a retry delay.
+fn pick_next(items: &[Item], running: &HashMap<String, CancellationToken>, retry_at: &HashMap<String, Instant>, now: Instant) -> Option<Item> {
+    items
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| i.status == Status::Queued && !running.contains_key(&i.id) && retry_at.get(&i.id).map_or(true, |t| *t <= now))
+        // items are stored newest first, so a larger index is older
+        .max_by_key(|(idx, i)| (i.priority, *idx))
+        .map(|(_, i)| i.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item(id: &str, priority: i32, status: Status) -> Item {
+        Item { id: id.into(), url: format!("https://x/{id}"), filename: None, dir: ".".into(), headers: vec![], status, total: None, downloaded: 0, path: None, error: None, added: 0, checksum: None, priority, retries: 0 }
+    }
+
+    #[test]
+    fn oldest_first_unless_prioritised() {
+        let items = vec![item("new", 0, Status::Queued), item("old", 0, Status::Queued)];
+        let none = HashMap::new();
+        assert_eq!(pick_next(&items, &HashMap::new(), &none, Instant::now()).unwrap().id, "old");
+        let items = vec![item("new", 1, Status::Queued), item("old", 0, Status::Queued)];
+        assert_eq!(pick_next(&items, &HashMap::new(), &none, Instant::now()).unwrap().id, "new");
+    }
+
+    #[test]
+    fn skips_running_paused_and_waiting_retries() {
+        let now = Instant::now();
+        let items = vec![item("wait", 5, Status::Queued), item("paused", 9, Status::Paused), item("ok", 0, Status::Queued)];
+        let mut retry = HashMap::new();
+        retry.insert("wait".to_string(), now + Duration::from_secs(30));
+        assert_eq!(pick_next(&items, &HashMap::new(), &retry, now).unwrap().id, "ok");
+        assert!(pick_next(&items, &HashMap::new(), &retry, now + Duration::from_secs(31)).unwrap().id == "wait");
+    }
+
+    #[test]
+    fn retry_policy() {
+        use grabnr_core::Error;
+        assert!(is_transient(&Error::AllFailed("x".into())));
+        assert!(is_transient(&Error::Status(503)));
+        assert!(!is_transient(&Error::Status(404)));
+        assert!(!is_transient(&Error::DiskFull { need: 1, free: 0 }));
+        assert_eq!(retry_delay(1), Duration::from_secs(10));
+        assert_eq!(retry_delay(2), Duration::from_secs(30));
+        assert_eq!(retry_delay(20), Duration::from_secs(600));
     }
 }

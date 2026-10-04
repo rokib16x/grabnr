@@ -26,7 +26,11 @@ export function AddDialog({ defaultDir, onClose }: { defaultDir?: string; onClos
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     try {
-      await api.add(url, name, dir === defaultDir ? undefined : dir, sum);
+      const r = await api.add(url, name, dir === defaultDir ? undefined : dir, sum);
+      if (r.duplicate) {
+        setErr("This link is already in your list.");
+        return;
+      }
       onClose();
     } catch (x) {
       setErr(String(x));
@@ -60,7 +64,7 @@ export function AddDialog({ defaultDir, onClose }: { defaultDir?: string; onClos
         </div>
         <p className="hint">grabnr splits the file into chunks and pulls them over every connection you have enabled in Manage Connections.</p>
 
-        {err && <p className="err">{err}</p>}
+        {err && <p className="err" role="alert">{err}</p>}
         <div className="sheet-actions">
           <button type="button" onClick={onClose}>Cancel</button>
           <button type="submit" className="primary" disabled={!url.trim()}>Add Download</button>

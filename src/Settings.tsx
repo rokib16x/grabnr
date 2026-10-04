@@ -76,6 +76,11 @@ export function SettingsPanel({ settings, apiPort, apiOk, onChange, onClose }: {
             <input type="number" min={0} max={100000} step={0.5} value={settings.speed_limit_kbps / 1024} onChange={(e) => patch({ speed_limit_kbps: Math.round(Math.max(0, +e.target.value) * 1024) })} />
           </div>
           <div className="field">
+            <span>Retry failed downloads</span>
+            <input type="number" min={0} max={10} value={settings.auto_retry} onChange={(e) => patch({ auto_retry: +e.target.value })} />
+            <span className="muted">times, with growing delays</span>
+          </div>
+          <div className="field">
             <span>Simultaneous downloads</span>
             <input type="number" min={1} max={10} value={settings.max_active} onChange={(e) => patch({ max_active: +e.target.value })} />
           </div>
