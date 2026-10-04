@@ -41,6 +41,8 @@ function reduce(s: State, a: Action): State {
         next = { ...cur, notice: `${cur.routes[e.route]?.name ?? "A link"} dropped out (${e.reason}); the other links are taking over.` };
       } else if (cur && e.type === "route_up") {
         next = { ...cur, notice: `${e.name} joined the download.` };
+      } else if (cur && e.type === "resume_checked") {
+        next = e.redo > 0 ? { ...cur, notice: `Checked ${e.checked} finished pieces from the last run; ${e.redo} were damaged or unverifiable and will be downloaded again.` } : cur;
       } else if (cur && e.type === "resume_discarded") {
         next = { ...cur, notice: `Started over: ${e.reason}.` };
       }

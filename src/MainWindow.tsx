@@ -7,6 +7,7 @@ import { fileName } from "./format";
 import { HistoryView } from "./HistoryView";
 import { Icon } from "./icons";
 import { Inspector } from "./Inspector";
+import { LinkDialog } from "./LinkDialog";
 import { MoreMenu } from "./Menu";
 import { Onboarding } from "./Onboarding";
 import { SettingsPanel } from "./Settings";
@@ -67,6 +68,7 @@ export function MainWindow() {
   const [dropping, setDropping] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [skipOnboarding, setSkipOnboarding] = useState(false);
+  const [relink, setRelink] = useState<Item | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
 
@@ -244,7 +246,7 @@ export function MainWindow() {
               ) : (
                 <ul className="list">
                   {shown.map((i) => (
-                    <DownloadRow key={i.id} item={i} live={d.live[i.id]} selected={current?.id === i.id} onSelect={() => setSelected(i.id)} drag={dragFor(i)} />
+                    <DownloadRow key={i.id} item={i} live={d.live[i.id]} selected={current?.id === i.id} onSelect={() => setSelected(i.id)} drag={dragFor(i)} onChangeLink={setRelink} />
                   ))}
                 </ul>
               )}
@@ -257,6 +259,7 @@ export function MainWindow() {
       {dropping && <div className="drop-overlay" aria-hidden="true"><div><Icon name="download" size={28} /><p>Drop links to download</p></div></div>}
       {toast && <div className="toast" role="status">{toast}</div>}
       {adding && <AddDialog defaultDir={d.app?.settings.dest_dir} onClose={() => setAdding(false)} />}
+      {relink && <LinkDialog item={relink} onClose={() => setRelink(null)} />}
       {palette && <CommandPalette commands={commands} onClose={() => setPalette(false)} />}
       {settingsOpen && d.app && (
         <SettingsPanel settings={d.app.settings} apiPort={d.app.api_port} apiOk={d.app.api_ok} onChange={(settings: Settings) => d.setApp({ ...d.app!, settings })} onClose={() => setSettingsOpen(false)} />

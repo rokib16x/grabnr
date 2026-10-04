@@ -117,6 +117,7 @@ export const mock = {
         queue.forEach((q, i) => { q.priority = queue.length - i; handlers?.item({ ...q }); });
         return;
       }
+      case "update_link": { const it = items.find((i) => i.id === args.id); if (it) { it.url = String(args.url); it.error = null; run(it); } return; }
       case "set_after_all": return;
       case "export_settings": case "export_queue": return;
       case "get_diagnostics": return "grabnr 0.1.0\nmacos aarch64\n\nConnections\n  en0  Wi-Fi  WiFi  enabled\n\nDownloads: 2 downloading, 0 queued, 1 paused, 3 finished, 1 failed\n";

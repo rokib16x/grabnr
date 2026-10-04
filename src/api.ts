@@ -24,6 +24,7 @@ export const api = {
     if (path) await call<void>("export_history", { path });
     return path;
   },
+  updateLink: (id: string, url: string) => call<void>("update_link", { id, url }),
   reorder: (id: string, before: string | null) => call<void>("reorder_download", { id, before }),
   setAfterAll: (action: AfterAll) => call<void>("set_after_all", { action }),
   move: (id: string, toFront: boolean) => call<void>("move_download", { id, toFront }),

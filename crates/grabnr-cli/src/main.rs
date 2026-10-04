@@ -164,6 +164,10 @@ async fn main() {
                     if ranges { "" } else { " (server has no range support: single stream)" },
                     if resumed_chunks > 0 { format!(", resuming with {resumed_chunks} done") } else { String::new() }
                 ),
+                Event::ResumeChecked { checked, redo } if redo > 0 => {
+                    eprintln!("checked {checked} finished pieces, {redo} damaged and will be fetched again")
+                }
+                Event::ResumeChecked { .. } => {}
                 Event::ResumeDiscarded { reason } => eprintln!("starting over: {reason}"),
                 Event::RouteDown { route, reason } => eprintln!("\nlink #{route} dropped out: {reason}"),
                 Event::RouteUp { name, .. } => eprintln!("\nlink {name} joined"),

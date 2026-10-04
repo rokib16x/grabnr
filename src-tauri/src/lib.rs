@@ -232,6 +232,11 @@ async fn thumbnail(m: Mgr<'_>, id: String) -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
+fn update_link(m: Mgr, id: String, url: String) -> Result<(), String> {
+    m.inner().update_link(&id, &url)
+}
+
+#[tauri::command]
 fn reorder_download(m: Mgr, id: String, before: Option<String>) {
     m.reorder(&id, before.as_deref());
 }
@@ -543,6 +548,7 @@ pub fn run() {
             export_queue,
             get_diagnostics,
             thumbnail,
+            update_link,
             reorder_download,
             set_after_all,
             move_download,

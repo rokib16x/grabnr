@@ -30,6 +30,7 @@ export type RouteStat = { name: string; bytes: number; bytes_per_sec: number; co
 export type EngineEvent =
   | { type: "started"; filename: string; total: number | null; chunks: number; ranges: boolean; resumed_chunks: number }
   | { type: "resume_discarded"; reason: string }
+  | { type: "resume_checked"; checked: number; redo: number }
   | { type: "progress"; downloaded: number; total: number | null; bytes_per_sec: number; routes: RouteStat[] }
   | { type: "chunk_done"; idx: number; route: number }
   | { type: "route_down"; route: number; reason: string }

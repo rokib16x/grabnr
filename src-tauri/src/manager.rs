@@ -479,6 +479,26 @@ impl Manager {
         (id, false)
     }
 
+    /// Point a stopped download at a new link (for example a fresh signed URL) and carry on where it left off.
+    /// The server must still report the same file; if not, the engine starts over by itself.
+    pub fn update_link(self: &Arc<Self>, id: &str, url: &str) -> Result<(), String> {
+        let url = url.trim();
+        if !(url.starts_with("http://") || url.starts_with("https://")) || url::Url::parse(url).is_err() {
+            return Err("Enter a full http:// or https:// link".into());
+        }
+        {
+            let mut g = self.inner.lock().unwrap();
+            let i = g.items.iter_mut().find(|i| i.id == id).ok_or("That download no longer exists")?;
+            if matches!(i.status, Status::Downloading | Status::Done) {
+                return Err("Only a paused, waiting or failed download can get a new link".into());
+            }
+            i.url = url.to_string();
+            i.mirrors.clear();
+        }
+        self.resume(id);
+        Ok(())
+    }
+
     pub fn pause(&self, id: &str) {
         let c = self.inner.lock().unwrap().cancels.get(id).cloned();
         match c {
@@ -660,6 +680,8 @@ impl Manager {
         opts.headers = item.headers.clone();
         opts.conns_per_route = conns;
         opts.store = Some(self.store.clone());
+        // Keyed by the download, not its link, so a replaced link keeps the partial file.
+        opts.resume_key = Some(item.id.clone());
         // Links that come and go (cable plugged in, Wi-Fi back after sleep) join or leave this download.
         let watcher = self.clone();
         opts.link_watch = Some(Arc::new(move || watcher.link_routes()));

@@ -550,3 +550,78 @@ async fn posts_json_to_a_webhook() {
 
     assert!(grabnr_core::fetch::post_json("ftp://x/y", "{}".into(), None, std::time::Duration::from_secs(1)).await.is_err());
 }
+
+fn resume_options(url: &str, dir: &std::path::Path, store: &Arc<Store>, key: Option<&str>) -> Options {
+    let mut o = Options::new(url, dir, two_routes());
+    o.conns_per_route = 1;
+    o.store = Some(store.clone());
+    o.resume_key = key.map(str::to_owned);
+    o
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_damaged_finished_piece_is_downloaded_again_on_resume() {
+    let s = serve(true).await;
+    let dir = tmp("damaged");
+    let store = Arc::new(Store::in_memory().unwrap());
+    let url = format!("http://127.0.0.1:{}/d.bin", s.port);
+    assert!(matches!(cancel_after_chunks(resume_options(&url, &dir, &store, None), 3).await, Error::Cancelled));
+
+    // Simulate a crash that lost data the database already counted as done: zero the start of the file.
+    let staging = dir.join("d.bin.grabnr");
+    let mut bytes = std::fs::read(&staging).unwrap();
+    bytes[..4096].fill(0);
+    std::fs::write(&staging, bytes).unwrap();
+
+    let seen = Arc::new(std::sync::Mutex::new((0usize, 0usize)));
+    let sn = seen.clone();
+    let emit: Arc<dyn Fn(Event) + Send + Sync> = Arc::new(move |e| {
+        if let Event::ResumeChecked { checked, redo } = e {
+            *sn.lock().unwrap() = (checked, redo);
+        }
+    });
+    let path = download(resume_options(&url, &dir, &store, None), CancellationToken::new(), emit).await.unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), expected(0), "the zeroed piece must not survive into the final file");
+    let (checked, redo) = *seen.lock().unwrap();
+    assert!(checked >= 3 && redo >= 1, "checked {checked}, redo {redo}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn untouched_pieces_pass_the_check_and_are_kept() {
+    let s = serve(true).await;
+    let dir = tmp("intact");
+    let store = Arc::new(Store::in_memory().unwrap());
+    let url = format!("http://127.0.0.1:{}/i.bin", s.port);
+    assert!(matches!(cancel_after_chunks(resume_options(&url, &dir, &store, None), 2).await, Error::Cancelled));
+    let redo = Arc::new(AtomicUsize::new(99));
+    let r = redo.clone();
+    let emit: Arc<dyn Fn(Event) + Send + Sync> = Arc::new(move |e| {
+        if let Event::ResumeChecked { redo, .. } = e {
+            r.store(redo, Ordering::Relaxed);
+        }
+    });
+    let path = download(resume_options(&url, &dir, &store, None), CancellationToken::new(), emit).await.unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), expected(0));
+    assert_eq!(redo.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_replaced_link_resumes_the_same_partial_file() {
+    let s = serve(true).await;
+    let dir = tmp("newlink");
+    let store = Arc::new(Store::in_memory().unwrap());
+    let old = format!("http://127.0.0.1:{}/old-signed-url.bin?sig=expired", s.port);
+    let new = format!("http://127.0.0.1:{}/old-signed-url.bin?sig=fresh", s.port);
+    assert!(matches!(cancel_after_chunks(resume_options(&old, &dir, &store, Some("item-1")), 2).await, Error::Cancelled));
+
+    let resumed = Arc::new(AtomicUsize::new(0));
+    let r = resumed.clone();
+    let emit: Arc<dyn Fn(Event) + Send + Sync> = Arc::new(move |e| {
+        if let Event::Started { resumed_chunks, .. } = e {
+            r.store(resumed_chunks, Ordering::Relaxed);
+        }
+    });
+    let path = download(resume_options(&new, &dir, &store, Some("item-1")), CancellationToken::new(), emit).await.unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), expected(0));
+    assert!(resumed.load(Ordering::Relaxed) >= 2, "the new link should keep the chunks already on disk");
+}

@@ -22,7 +22,7 @@ use crate::interfaces::Link;
 use crate::limiter::Limiter;
 use crate::probe::{probe, sanitize, Probe};
 use crate::scheduler::{chunk_size_for, plan, Lease, Scheduler};
-use crate::store::{Record, Store};
+use crate::store::{DoneChunk, Record, Store};
 use crate::writer::OffsetFile;
 
 /// A path a worker can take to the internet: a bound link, or the OS default.
@@ -93,6 +93,9 @@ pub struct Options {
     pub revive_after: Duration,
     /// With no working link at all, wait this long for one to come back before failing.
     pub no_link_grace: Duration,
+    /// Stable name for the resume state. Without it the link and file name are used, so changing the link starts over;
+    /// with it a replaced link (for example a new signed URL) can carry on with the same partial file.
+    pub resume_key: Option<String>,
     /// Other URLs for the same file. Mirrors that do not report the same size (or lack range support) are ignored.
     pub mirrors: Vec<String>,
 }
@@ -121,6 +124,7 @@ impl Options {
             revive_after: Duration::from_secs(10),
             no_link_grace: Duration::from_secs(30),
             mirrors: Vec::new(),
+            resume_key: None,
         }
     }
 }
@@ -156,6 +160,11 @@ pub enum Event {
     },
     ResumeDiscarded {
         reason: String,
+    },
+    /// Finished pieces from an earlier run were re-read and checked; `redo` of them were damaged or unverifiable.
+    ResumeChecked {
+        checked: usize,
+        redo: usize,
     },
     Progress(Snapshot),
     /// Which link fetched which chunk (drives the chunk grid).
@@ -362,9 +371,9 @@ async fn ranged(
     cancel: CancellationToken,
     emit: Emit,
 ) -> Result<PathBuf> {
-    let id = format!("{}|{}", opts.url, staging.display());
+    let id = opts.resume_key.clone().unwrap_or_else(|| format!("{}|{}", opts.url, staging.display()));
     let mut chunk_size = chunk_size_for(total, opts.routes.len());
-    let mut done: Vec<usize> = Vec::new();
+    let mut done_raw: Vec<DoneChunk> = Vec::new();
 
     let fresh = Record {
         id: id.clone(),
@@ -382,7 +391,7 @@ async fn ranged(
                 && std::fs::metadata(staging).map(|m| m.len() == total).unwrap_or(false) =>
         {
             chunk_size = rec.chunk_size;
-            done = d;
+            done_raw = d;
         }
         prev => {
             if prev.is_some() {
@@ -396,6 +405,24 @@ async fn ranged(
     }
 
     let ranges = plan(total, chunk_size);
+    // Trust nothing from the last run: re-read every finished piece and compare it with the checksum saved when it
+    // completed. This catches a crash or power loss that left a piece marked done but never written, and any edit
+    // to the partial file. Damaged pieces are simply downloaded again.
+    let done: Vec<usize> = if done_raw.is_empty() {
+        Vec::new()
+    } else {
+        let (path, rs, raw) = (staging.to_path_buf(), ranges.clone(), done_raw.clone());
+        let checked = raw.len();
+        let (good, bad) =
+            tokio::task::spawn_blocking(move || verify_done(&path, &rs, &raw)).await.map_err(|e| Error::Other(e.to_string()))?;
+        if !bad.is_empty() {
+            if let Some(s) = &opts.store {
+                s.forget(&id, &bad)?;
+            }
+        }
+        emit(Event::ResumeChecked { checked, redo: bad.len() });
+        good
+    };
     let resumed_bytes: u64 = done.iter().filter_map(|&i| ranges.get(i)).map(|&(s, e)| e - s + 1).sum();
     shared.global.store(resumed_bytes, Ordering::Relaxed);
     disk::ensure_space(&opts.dest_dir, total.saturating_sub(resumed_bytes))?;
@@ -760,6 +787,7 @@ async fn fetch_chunk(
 
     let mut stream = resp.bytes_stream();
     let (mut pos, mut got) = (start, 0u64);
+    let mut crc = crc32fast::Hasher::new();
     let rollback = |got: u64| {
         ctx.shared.global.fetch_sub(got, Ordering::Relaxed);
     };
@@ -788,6 +816,7 @@ async fn fetch_chunk(
                     rollback(got);
                     return Err(FetchErr::Fatal(e.into()));
                 }
+                crc.update(&b[..take]);
                 pos += take as u64;
                 got += take as u64;
                 rs.bytes.fetch_add(take as u64, Ordering::Relaxed);
@@ -804,9 +833,10 @@ async fn fetch_chunk(
         }
     }
 
+    let crc = crc.finalize();
     if ctx.sched.complete(idx) {
         if let Some(s) = &ctx.store {
-            if let Err(e) = s.mark_done(&ctx.id, idx) {
+            if let Err(e) = s.mark_done(&ctx.id, idx, crc) {
                 return Err(FetchErr::Fatal(e));
             }
         }
@@ -964,6 +994,40 @@ fn headers_for(headers: &[(String, String)], origin: &str, target: &str) -> Head
         }
     }
     m
+}
+
+/// Split finished chunks into those whose bytes still match their saved checksum and those that do not.
+fn verify_done(path: &Path, ranges: &[(u64, u64)], done: &[DoneChunk]) -> (Vec<usize>, Vec<usize>) {
+    use std::io::{Read, Seek, SeekFrom};
+    let (mut good, mut bad) = (Vec::new(), Vec::new());
+    let Ok(mut f) = std::fs::File::open(path) else { return (good, done.iter().map(|d| d.0).collect()) };
+    let mut buf = vec![0u8; 1 << 20];
+    for &(idx, crc) in done {
+        let (Some(&(start, end)), Some(want)) = (ranges.get(idx), crc) else {
+            bad.push(idx);
+            continue;
+        };
+        let mut h = crc32fast::Hasher::new();
+        let mut left = end - start + 1;
+        let ok = f.seek(SeekFrom::Start(start)).is_ok()
+            && loop {
+                if left == 0 {
+                    break true;
+                }
+                let n = (buf.len() as u64).min(left) as usize;
+                if f.read_exact(&mut buf[..n]).is_err() {
+                    break false;
+                }
+                h.update(&buf[..n]);
+                left -= n as u64;
+            };
+        if ok && h.finalize() == want {
+            good.push(idx);
+        } else {
+            bad.push(idx);
+        }
+    }
+    (good, bad)
 }
 
 #[cfg(test)]

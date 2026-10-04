@@ -50,7 +50,7 @@ export function PlayPause({ item }: { item: Item }) {
 
 export type DragProps = { onDragStart: () => void; onDragOver: () => void; onDrop: () => void; onDragEnd: () => void; over: boolean };
 
-export function DownloadRow({ item, live, selected, onSelect, drag }: { item: Item; live?: Live; selected: boolean; onSelect: () => void; drag?: DragProps }) {
+export function DownloadRow({ item, live, selected, onSelect, drag, onChangeLink }: { item: Item; live?: Live; selected: boolean; onSelect: () => void; drag?: DragProps; onChangeLink?: (i: Item) => void }) {
   const { downloaded, pct, speed } = progressOf(item, live);
   const name = fileName(item.url, item.filename);
   return (
@@ -79,6 +79,7 @@ export function DownloadRow({ item, live, selected, onSelect, drag }: { item: It
           items={[
             ...(item.status === "done" ? [{ label: "Open", onClick: () => api.open(item.id) }, { label: "Show in Finder", onClick: () => api.reveal(item.id) }] : []),
             ...(item.status === "queued" || item.status === "paused" ? [{ label: "Download next", onClick: () => api.move(item.id, true) }, { label: "Download last", onClick: () => api.move(item.id, false) }] : []),
+            ...(onChangeLink && (item.status === "paused" || item.status === "error" || item.status === "queued") ? [{ label: "Change link…", onClick: () => onChangeLink(item) }] : []),
             { label: "Copy link", onClick: () => void navigator.clipboard?.writeText(item.url) },
             "sep",
             { label: "Remove from list", onClick: () => api.remove(item.id, false) },
