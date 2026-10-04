@@ -472,6 +472,8 @@ fn dock_progress(app: &tauri::AppHandle, running: usize, pct: Option<u64>) {
         (_, None) => ProgressBarState { status: Some(ProgressBarStatus::Indeterminate), progress: None },
     };
     let _ = w.set_progress_bar(state);
+    // The Dock badge exists on macOS only.
+    #[cfg(target_os = "macos")]
     let _ = w.set_badge_label(if running == 0 { None } else { Some(running.to_string()) });
 }
 
