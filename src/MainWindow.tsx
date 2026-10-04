@@ -15,15 +15,16 @@ import { filterTitle, matchFilter, Sidebar, type Filter } from "./Sidebar";
 import { useDownloads } from "./store";
 import type { AfterAll, Item, Live, Settings } from "./types";
 import { MOD } from "./platform";
+import { msg, t, tn } from "./i18n";
 
 type Sort = "queue" | "newest" | "oldest" | "name" | "size" | "progress";
 const SORTS: { id: Sort; label: string }[] = [
-  { id: "queue", label: "Queue order (drag to reorder)" },
-  { id: "newest", label: "Newest first" },
-  { id: "oldest", label: "Oldest first" },
-  { id: "name", label: "Name" },
-  { id: "size", label: "Size" },
-  { id: "progress", label: "Progress" },
+  { id: "queue", label: msg("Queue order (drag to reorder)") },
+  { id: "newest", label: msg("Newest first") },
+  { id: "oldest", label: msg("Oldest first") },
+  { id: "name", label: msg("Name") },
+  { id: "size", label: msg("Size") },
+  { id: "progress", label: msg("Progress") },
 ];
 
 function sorter(sort: Sort, live: Record<string, Live>, order: Map<string, number>) {
@@ -84,7 +85,7 @@ export function MainWindow() {
   const addText = useCallback(async (text: string) => {
     try {
       const r = await api.addBatch(text);
-      setToast(r.added ? `Added ${r.added} ${r.added === 1 ? "download" : "downloads"}${r.duplicates ? `, ${r.duplicates} already in the list` : ""}.` : r.duplicates ? "Already in your list." : "No links added.");
+      setToast(r.added ? (r.duplicates ? tn("Added {n} download, {d} already in the list.", "Added {n} downloads, {d} already in the list.", r.added, { d: r.duplicates }) : tn("Added {n} download.", "Added {n} downloads.", r.added)) : r.duplicates ? t("Already in your list.") : t("No links added."));
     } catch (e) {
       setToast(String(e));
     }
@@ -156,10 +157,10 @@ export function MainWindow() {
         }
       : undefined;
   const AFTER: { id: AfterAll; label: string }[] = [
-    { id: "none", label: "Do nothing" },
-    { id: "sleep", label: "Put the Mac to sleep" },
-    { id: "quit", label: "Quit grabnr" },
-    ...(d.app?.settings.after_command.trim() ? [{ id: "command" as AfterAll, label: "Run my command" }] : []),
+    { id: "none", label: t("Do nothing") },
+    { id: "sleep", label: t("Put the computer to sleep") },
+    { id: "quit", label: t("Quit grabnr") },
+    ...(d.app?.settings.after_command.trim() ? [{ id: "command" as AfterAll, label: t("Run my command") }] : []),
   ];
 
   // Keep something selected so the inspector is never blank while there are downloads.
@@ -170,12 +171,12 @@ export function MainWindow() {
   const doneCount = d.items.filter((i) => i.status === "done").length;
 
   const commands: Command[] = useMemo(() => [
-    { id: "add", label: "Add Download…", hint: `${MOD}N`, icon: "plus", run: () => setAdding(true) },
-    { id: "pause", label: "Pause All", icon: "pause", run: () => void api.pauseAll() },
-    { id: "resume", label: "Resume All", icon: "play", run: () => void api.resumeAll() },
-    { id: "clear", label: "Remove Completed from the List", icon: "trash", run: () => d.items.filter((i) => i.status === "done").forEach((i) => void api.remove(i.id, false)) },
-    { id: "prefs", label: "Preferences…", hint: `${MOD},`, icon: "sliders", run: () => setSettingsOpen(true) },
-    ...(["all", "downloading", "done", "paused", "history"] as Filter[]).map((f) => ({ id: `go-${f}`, label: `Show ${filterTitle(f)}`, icon: "inbox", run: () => setFilter(f) })),
+    { id: "add", label: t("Add Download…"), hint: `${MOD}N`, icon: "plus", run: () => setAdding(true) },
+    { id: "pause", label: t("Pause All"), icon: "pause", run: () => void api.pauseAll() },
+    { id: "resume", label: t("Resume All"), icon: "play", run: () => void api.resumeAll() },
+    { id: "clear", label: t("Remove Completed from the List"), icon: "trash", run: () => d.items.filter((i) => i.status === "done").forEach((i) => void api.remove(i.id, false)) },
+    { id: "prefs", label: t("Preferences…"), hint: `${MOD},`, icon: "sliders", run: () => setSettingsOpen(true) },
+    ...(["all", "downloading", "done", "paused", "history"] as Filter[]).map((f) => ({ id: `go-${f}`, label: t("Show {what}", { what: filterTitle(f) }), icon: "inbox", run: () => setFilter(f) })),
     ...d.items.map((i) => ({ id: `item-${i.id}`, label: fileName(i.url, i.filename), hint: i.status, icon: "download", run: () => { setFilter("all"); setSelected(i.id); } })),
   ], [d.items]);
 
@@ -187,46 +188,46 @@ export function MainWindow() {
         <header data-tauri-drag-region>
           <div className="title" data-tauri-drag-region>
             <h1>{filterTitle(filter)}</h1>
-            <p>{d.items.length} {d.items.length === 1 ? "item" : "items"}{d.active.length ? ` · ${d.active.length} downloading` : ""}</p>
+            <p>{tn("{n} item", "{n} items", d.items.length)}{d.active.length ? ` · ${t("{n} downloading", { n: d.active.length })}` : ""}</p>
             {(d.schedule.rule || d.afterAll !== "none") && (
               <div className="chips">
                 {d.schedule.rule && (
-                  <span className="chip warn" title="Set in Preferences, under Schedule">
+                  <span className="chip warn" title={t("Set in Preferences, under Schedule")}>
                     <Icon name="clock" size={12} />
-                    {d.schedule.hold ? `Held by schedule: ${d.schedule.rule}` : d.schedule.limit_kbps ? `${d.schedule.rule}: limited to ${(d.schedule.limit_kbps / 1024).toFixed(1)} MB/s` : `${d.schedule.rule}: full speed`}
+                    {d.schedule.hold ? t("Held by schedule: {rule}", { rule: d.schedule.rule }) : d.schedule.limit_kbps ? t("{rule}: limited to {speed} MB/s", { rule: d.schedule.rule, speed: (d.schedule.limit_kbps / 1024).toFixed(1) }) : t("{rule}: full speed", { rule: d.schedule.rule })}
                   </span>
                 )}
                 {d.afterAll !== "none" && (
                   <span className="chip">
-                    When finished: {AFTER.find((a) => a.id === d.afterAll)?.label ?? d.afterAll}
-                    <button className="chip-x" aria-label="Cancel the when-finished action" onClick={() => void api.setAfterAll("none")}><Icon name="x" size={11} /></button>
+                    {t("When finished: {what}", { what: AFTER.find((a) => a.id === d.afterAll)?.label ?? d.afterAll })}
+                    <button className="chip-x" aria-label={t("Cancel the when-finished action")} onClick={() => void api.setAfterAll("none")}><Icon name="x" size={11} /></button>
                   </span>
                 )}
               </div>
             )}
           </div>
           <div className="tools">
-            <button className="round" aria-label="Add download" title={`Add download (${MOD}N)`} onClick={() => setAdding(true)}><Icon name="plus" /></button>
-            <button className="round" aria-label="Resume all" title="Resume all" disabled={!canResume} onClick={() => api.resumeAll()}><Icon name="play" /></button>
-            <button className="round" aria-label="Pause all" title="Pause all" disabled={!canPause} onClick={() => api.pauseAll()}><Icon name="pause" /></button>
-            <button className="round" aria-label="Remove completed" title="Remove completed from the list" disabled={!hasDone} onClick={() => d.items.filter((i) => i.status === "done").forEach((i) => api.remove(i.id, false))}><Icon name="trash" /></button>
+            <button className="round" aria-label={t("Add download")} title={t("Add download ({key}N)", { key: MOD })} onClick={() => setAdding(true)}><Icon name="plus" /></button>
+            <button className="round" aria-label={t("Resume all")} title={t("Resume all")} disabled={!canResume} onClick={() => api.resumeAll()}><Icon name="play" /></button>
+            <button className="round" aria-label={t("Pause all")} title={t("Pause all")} disabled={!canPause} onClick={() => api.pauseAll()}><Icon name="pause" /></button>
+            <button className="round" aria-label={t("Remove completed")} title={t("Remove completed from the list")} disabled={!hasDone} onClick={() => d.items.filter((i) => i.status === "done").forEach((i) => api.remove(i.id, false))}><Icon name="trash" /></button>
             <MoreMenu
               items={[
-                { label: "Add Download…", onClick: () => setAdding(true) },
-                { label: "Command Palette…", onClick: () => setPalette(true) },
-                { label: "Export link list…", onClick: () => void api.exportQueue().then((p) => p && setToast("Link list saved.")).catch((e) => setToast(String(e))) },
+                { label: t("Add Download…"), onClick: () => setAdding(true) },
+                { label: t("Command Palette…"), onClick: () => setPalette(true) },
+                { label: t("Export link list…"), onClick: () => void api.exportQueue().then((p) => p && setToast(t("Link list saved."))).catch((e) => setToast(String(e))) },
                 "sep",
-                ...AFTER.map((a) => ({ label: `${d.afterAll === a.id ? "✓ " : "    "}When finished: ${a.label}`, onClick: () => void api.setAfterAll(a.id) })),
+                ...AFTER.map((a) => ({ label: `${d.afterAll === a.id ? "✓ " : "    "}${t("When finished: {what}", { what: a.label })}`, onClick: () => void api.setAfterAll(a.id) })),
                 "sep",
-                ...SORTS.map((s) => ({ label: `${sort === s.id ? "✓ " : "    "}Sort by ${s.label}`, onClick: () => setSort(s.id) })),
+                ...SORTS.map((s) => ({ label: `${sort === s.id ? "✓ " : "    "}${t("Sort by {how}", { how: t(s.label) })}`, onClick: () => setSort(s.id) })),
                 "sep",
-                { label: "Preferences…", onClick: () => setSettingsOpen(true) },
+                { label: t("Preferences…"), onClick: () => setSettingsOpen(true) },
               ]}
             />
           </div>
           <label className="search">
             <Icon name="search" size={15} />
-            <input type="search" placeholder="Search downloads…" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search downloads" />
+            <input type="search" placeholder={t("Search downloads…")} value={query} onChange={(e) => setQuery(e.target.value)} aria-label={t("Search downloads")} />
           </label>
         </header>
 
@@ -240,9 +241,9 @@ export function MainWindow() {
               {shown.length === 0 ? (
                 <div className="empty">
                   <img src="/grabnr.svg" alt="" width="64" height="64" />
-                  <h2>{d.items.length ? "Nothing here" : "No downloads yet"}</h2>
-                  <p>Paste a link anywhere in this window, drop links or a text file here, press <b>+</b>, or install the browser extension so downloads from Chrome and Brave start here.</p>
-                  {!d.items.length && <button className="primary" onClick={() => setAdding(true)}>Add Download</button>}
+                  <h2>{d.items.length ? t("Nothing here") : t("No downloads yet")}</h2>
+                  <p>{t("Paste a link anywhere in this window, drop links or a text file here, press + , or install the browser extension so downloads from Chrome and Brave start here.")}</p>
+                  {!d.items.length && <button className="primary" onClick={() => setAdding(true)}>{t("Add Download")}</button>}
                 </div>
               ) : (
                 <ul className="list">
@@ -257,7 +258,7 @@ export function MainWindow() {
         )}
       </section>
 
-      {dropping && <div className="drop-overlay" aria-hidden="true"><div><Icon name="download" size={28} /><p>Drop links to download</p></div></div>}
+      {dropping && <div className="drop-overlay" aria-hidden="true"><div><Icon name="download" size={28} /><p>{t("Drop links to download")}</p></div></div>}
       {toast && <div className="toast" role="status">{toast}</div>}
       {adding && <AddDialog defaultDir={d.app?.settings.dest_dir} onClose={() => setAdding(false)} />}
       {relink && <LinkDialog item={relink} onClose={() => setRelink(null)} />}

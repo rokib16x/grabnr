@@ -5,6 +5,7 @@ import { Icon } from "./icons";
 import { MoreMenu } from "./Menu";
 import type { Item, Live } from "./types";
 import { FILE_MANAGER } from "./platform";
+import { t } from "./i18n";
 
 export function progressOf(item: Item, live?: Live) {
   const downloaded = item.status === "downloading" ? Math.max(live?.downloaded ?? 0, item.downloaded) : item.downloaded;
@@ -35,18 +36,18 @@ export function ProgressBar({ item, live, thin }: { item: Item; live?: Live; thi
 }
 
 export function statusLine(item: Item, downloaded: number, speed: number) {
-  const size = item.total ? `${bytes(downloaded)} of ${bytes(item.total)}` : bytes(downloaded);
-  if (item.status === "downloading") return `${size} · ${rate(speed)}${item.total && speed ? ` · ${eta(item.total - downloaded, speed)} left` : ""}`;
-  if (item.status === "queued") return item.error ?? "Waiting to start";
-  if (item.status === "paused") return `${item.total ? bytes(item.total) : bytes(downloaded)} · Paused`;
-  if (item.status === "error") return item.error ?? "Failed";
-  return `${item.total ? bytes(item.total) : bytes(downloaded)} · Completed`;
+  const size = item.total ? t("{done} of {total}", { done: bytes(downloaded), total: bytes(item.total) }) : bytes(downloaded);
+  if (item.status === "downloading") return `${size} · ${rate(speed)}${item.total && speed ? ` · ${t("{eta} left", { eta: eta(item.total - downloaded, speed) })}` : ""}`;
+  if (item.status === "queued") return item.error ?? t("Waiting to start");
+  if (item.status === "paused") return `${item.total ? bytes(item.total) : bytes(downloaded)} · ${t("Paused")}`;
+  if (item.status === "error") return item.error ?? t("Failed");
+  return `${item.total ? bytes(item.total) : bytes(downloaded)} · ${t("Completed")}`;
 }
 
 export function PlayPause({ item }: { item: Item }) {
-  if (item.status === "downloading" || item.status === "queued") return <button className="round" aria-label="Pause" onClick={(e) => { e.stopPropagation(); api.pause(item.id); }}><Icon name="pause" /></button>;
-  if (item.status === "done") return <span className="done-mark" aria-label="Completed"><Icon name="check" size={14} /></span>;
-  return <button className="round" aria-label={item.status === "error" ? "Retry" : "Resume"} onClick={(e) => { e.stopPropagation(); api.resume(item.id); }}><Icon name="play" /></button>;
+  if (item.status === "downloading" || item.status === "queued") return <button className="round" aria-label={t("Pause")} onClick={(e) => { e.stopPropagation(); api.pause(item.id); }}><Icon name="pause" /></button>;
+  if (item.status === "done") return <span className="done-mark" aria-label={t("Completed")}><Icon name="check" size={14} /></span>;
+  return <button className="round" aria-label={item.status === "error" ? t("Retry") : t("Resume")} onClick={(e) => { e.stopPropagation(); api.resume(item.id); }}><Icon name="play" /></button>;
 }
 
 export type DragProps = { onDragStart: () => void; onDragOver: () => void; onDrop: () => void; onDragEnd: () => void; over: boolean };
@@ -78,13 +79,13 @@ export function DownloadRow({ item, live, selected, onSelect, drag, onChangeLink
         <PlayPause item={item} />
         <MoreMenu
           items={[
-            ...(item.status === "done" ? [{ label: "Open", onClick: () => api.open(item.id) }, { label: FILE_MANAGER === "Finder" ? "Show in Finder" : "Show in folder", onClick: () => api.reveal(item.id) }] : []),
-            ...(item.status === "queued" || item.status === "paused" ? [{ label: "Download next", onClick: () => api.move(item.id, true) }, { label: "Download last", onClick: () => api.move(item.id, false) }] : []),
-            ...(onChangeLink && (item.status === "paused" || item.status === "error" || item.status === "queued") ? [{ label: "Change link…", onClick: () => onChangeLink(item) }] : []),
-            { label: "Copy link", onClick: () => void navigator.clipboard?.writeText(item.url) },
+            ...(item.status === "done" ? [{ label: t("Open"), onClick: () => api.open(item.id) }, { label: FILE_MANAGER === "Finder" ? t("Show in Finder") : t("Show in folder"), onClick: () => api.reveal(item.id) }] : []),
+            ...(item.status === "queued" || item.status === "paused" ? [{ label: t("Download next"), onClick: () => api.move(item.id, true) }, { label: t("Download last"), onClick: () => api.move(item.id, false) }] : []),
+            ...(onChangeLink && (item.status === "paused" || item.status === "error" || item.status === "queued") ? [{ label: t("Change link…"), onClick: () => onChangeLink(item) }] : []),
+            { label: t("Copy link"), onClick: () => void navigator.clipboard?.writeText(item.url) },
             "sep",
-            { label: "Remove from list", onClick: () => api.remove(item.id, false) },
-            ...(item.status !== "done" ? [{ label: "Cancel and delete partial file", danger: true, onClick: () => api.remove(item.id, true) }] : []),
+            { label: t("Remove from list"), onClick: () => api.remove(item.id, false) },
+            ...(item.status !== "done" ? [{ label: t("Cancel and delete partial file"), danger: true, onClick: () => api.remove(item.id, true) }] : []),
           ]}
         />
       </div>

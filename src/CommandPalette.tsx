@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./icons";
+import { t } from "./i18n";
 
 export type Command = { id: string; label: string; hint?: string; icon: string; run: () => void };
 
@@ -24,15 +25,15 @@ export function CommandPalette({ commands, onClose }: { commands: Command[]; onC
 
   return (
     <div className="modal palette-wrap" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="sheet palette" role="dialog" aria-label="Command palette">
+      <div className="sheet palette" role="dialog" aria-label={t("Command palette")}>
         <label className="search wide">
           <Icon name="search" size={15} />
           <input
             ref={input}
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Type a command or a download name"
-            aria-label="Command"
+            placeholder={t("Type a command or a download name")}
+            aria-label={t("Command")}
             onKeyDown={(e) => {
               if (e.key === "Escape") onClose();
               else if (e.key === "ArrowDown") { e.preventDefault(); setSel((s) => Math.min(shown.length - 1, s + 1)); }
@@ -47,7 +48,7 @@ export function CommandPalette({ commands, onClose }: { commands: Command[]; onC
               <Icon name={c.icon} size={15} /><span>{c.label}</span>{c.hint && <small>{c.hint}</small>}
             </li>
           ))}
-          {shown.length === 0 && <li className="muted">Nothing matches.</li>}
+          {shown.length === 0 && <li className="muted">{t("Nothing matches.")}</li>}
         </ul>
       </div>
     </div>

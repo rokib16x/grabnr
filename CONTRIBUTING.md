@@ -27,6 +27,12 @@ npm run e2e                 # browser tests of the UI against the mock backend
 
 CI runs the same checks.
 
+## Translating the UI
+
+User-visible text goes through `t("English text")` (see `src/i18n.ts`); the English text is the key. Use `{name}` for variables and `tn("{n} item", "{n} items", n)` for counts. Text in a constant is marked with `msg("...")` and translated where it is shown (`t(label)`).
+
+Translations live in `src/locales/<code>.ts`. `npm test` fails when a text is missing in a language, a translation keeps no placeholder it should, or an entry is no longer used. `node scripts/i18n-keys.mjs` lists every text; `node scripts/i18n-scan.mjs src/*.tsx` finds text that is not wrapped yet. To add a language, add a file, an entry in `LANGUAGES` and a loader in `src/i18n.ts`. Native-speaker corrections to the existing translations are very welcome.
+
 ## Where things are
 
 | Path | What |

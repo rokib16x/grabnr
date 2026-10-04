@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "./icons";
+import { msg, t } from "./i18n";
 
 export type MenuEntry = { label: string; onClick: () => void; danger?: boolean } | "sep";
 
 /** Round "···" button with a small macOS-style pop-up menu. */
-export function MoreMenu({ items, label = "More", align = "right" }: { items: MenuEntry[]; label?: string; align?: "left" | "right" }) {
+export function MoreMenu({ items, label = msg("More"), align = "right" }: { items: MenuEntry[]; label?: string; align?: "left" | "right" }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
 
@@ -22,7 +23,7 @@ export function MoreMenu({ items, label = "More", align = "right" }: { items: Me
 
   return (
     <div className="menu-wrap" ref={box}>
-      <button className="round" aria-label={label} aria-haspopup="menu" aria-expanded={open} onClick={(e) => { e.stopPropagation(); setOpen(!open); }}>
+      <button className="round" aria-label={t(label)} aria-haspopup="menu" aria-expanded={open} onClick={(e) => { e.stopPropagation(); setOpen(!open); }}>
         <Icon name="more" />
       </button>
       {open && (

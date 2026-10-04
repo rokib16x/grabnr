@@ -6,6 +6,7 @@ import { fileName, rate } from "./format";
 import { Icon } from "./icons";
 import { PlayPause, ProgressBar, progressOf, statusLine } from "./DownloadRow";
 import { useDownloads } from "./store";
+import { t } from "./i18n";
 
 /** Menu bar popover: what is downloading right now, plus the usual app actions. */
 export function TrayPopover() {
@@ -30,9 +31,9 @@ export function TrayPopover() {
   return (
     <div className="tray" ref={root}>
       <div className="tray-head">
-        <img src="/grabnr.svg" alt="" width="24" height="24" />
-        <strong>grabnr</strong>
-        <span className="tray-speed">{running.length ? rate(d.speed) : "Idle"}</span>
+        <img src="/grabnr.svg" alt={t("")} width="24" height="24" />
+        <strong>{t("grabnr")}</strong>
+        <span className="tray-speed">{running.length ? rate(d.speed) : t("Idle")}</span>
       </div>
 
       {list.length > 0 ? (
@@ -53,19 +54,19 @@ export function TrayPopover() {
           })}
         </ul>
       ) : (
-        <p className="tray-empty">No active downloads</p>
+        <p className="tray-empty">{t("No active downloads")}</p>
       )}
 
       <div className="tray-menu">
-        <button onClick={() => api.showMain()}><Icon name="inbox" />Show All Downloads{d.items.length > 0 && <small>{d.items.length}</small>}</button>
+        <button onClick={() => api.showMain()}><Icon name="inbox" />{t("Show All Downloads")}{d.items.length > 0 && <small>{d.items.length}</small>}</button>
         {running.length > 0 ? (
-          <button onClick={() => api.pauseAll()}><Icon name="pause" />Pause All</button>
+          <button onClick={() => api.pauseAll()}><Icon name="pause" />{t("Pause All")}</button>
         ) : (
-          <button disabled={!anyPaused} onClick={() => api.resumeAll()}><Icon name="play" />Resume All</button>
+          <button disabled={!anyPaused} onClick={() => api.resumeAll()}><Icon name="play" />{t("Resume All")}</button>
         )}
         <hr />
-        <button onClick={() => api.showMain(true)}><Icon name="sliders" />Preferences…</button>
-        <button onClick={() => api.quit()}><Icon name="power" />Quit grabnr</button>
+        <button onClick={() => api.showMain(true)}><Icon name="sliders" />{t("Preferences…")}</button>
+        <button onClick={() => api.quit()}><Icon name="power" />{t("Quit grabnr")}</button>
       </div>
     </div>
   );

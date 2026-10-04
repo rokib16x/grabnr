@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { linkColor } from "./format";
+import { t } from "./i18n";
 
 /** One cell per chunk, coloured by the link that fetched it. Very large files are bucketed. */
 export function ChunkGrid({ chunks, version, names }: { chunks: Uint8Array; version: number; names: string[] }) {
@@ -42,5 +43,5 @@ export function ChunkGrid({ chunks, version, names }: { chunks: Uint8Array; vers
     }
   }, [chunks, version, names]);
 
-  return <canvas ref={ref} className="grid" aria-label="Chunk map" />;
+  return <canvas ref={ref} className="grid" aria-label={t("Chunk map")} />;
 }

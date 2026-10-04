@@ -174,3 +174,15 @@ test("a magnet link is added and named by its display name", async ({ page }) =>
   await page.getByRole("button", { name: "Add Download", exact: true }).last().click();
   await expect(row(page, "Open Source Pack")).toBeVisible();
 });
+
+test("the language can be changed and is remembered", async ({ page }) => {
+  await open(page);
+  await page.getByRole("button", { name: "Manage Connections" }).click();
+  await page.getByLabel("Language").selectOption("de");
+  // Changing the language rebuilds the window, which also closes the preferences sheet.
+  await expect(page.getByRole("heading", { name: "Alle Downloads" })).toBeVisible();
+  await page.reload();
+  await page.getByRole("button", { name: "Überspringen" }).click();
+  await expect(page.getByRole("heading", { name: "Alle Downloads" })).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("lang", "de");
+});

@@ -2,6 +2,7 @@ import { useEffect, useReducer, useState } from "react";
 import { api, subscribe } from "./api";
 import { registerLinks } from "./format";
 import type { AfterAll, AppState, EngineEvent, Item, Link, Live, ScheduleEffect } from "./types";
+import { t } from "./i18n";
 
 type State = { items: Item[]; live: Record<string, Live> };
 type Action =
@@ -30,7 +31,7 @@ function reduce(s: State, a: Action): State {
       const e = a.e;
       let next: Live | undefined = cur;
       if (e.type === "started") {
-        next = { downloaded: 0, v: 0, routes: [], speed: 0, chunks: new Uint8Array(e.chunks), resumedChunks: e.resumed_chunks, history: [], notice: e.ranges ? null : "This server does not support ranges, so it downloads as a single stream." };
+        next = { downloaded: 0, v: 0, routes: [], speed: 0, chunks: new Uint8Array(e.chunks), resumedChunks: e.resumed_chunks, history: [], notice: e.ranges ? null : t("This server does not support ranges, so it downloads as a single stream.") };
       } else if (cur && e.type === "progress") {
         const history = e.routes.map((r, i) => [...(cur.history[i] ?? []), r.bytes_per_sec].slice(-HISTORY));
         next = { ...cur, downloaded: e.downloaded, speed: e.bytes_per_sec, routes: e.routes, history };
@@ -38,13 +39,13 @@ function reduce(s: State, a: Action): State {
         cur.chunks[e.idx] = e.route + 1; // in place: a copy per chunk would be wasteful on huge files
         next = { ...cur, v: cur.v + 1 };
       } else if (cur && e.type === "route_down") {
-        next = { ...cur, notice: `${cur.routes[e.route]?.name ?? "A link"} dropped out (${e.reason}); the other links are taking over.` };
+        next = { ...cur, notice: t("{link} dropped out ({reason}); the other links are taking over.", { link: cur.routes[e.route]?.name ?? t("A link"), reason: e.reason }) };
       } else if (cur && e.type === "route_up") {
-        next = { ...cur, notice: `${e.name} joined the download.` };
+        next = { ...cur, notice: t("{name} joined the download.", { name: e.name }) };
       } else if (cur && e.type === "resume_checked") {
-        next = e.redo > 0 ? { ...cur, notice: `Checked ${e.checked} finished pieces from the last run; ${e.redo} were damaged or unverifiable and will be downloaded again.` } : cur;
+        next = e.redo > 0 ? { ...cur, notice: t("Checked {checked} finished pieces from the last run; {redo} were damaged or unverifiable and will be downloaded again.", { checked: e.checked, redo: e.redo }) } : cur;
       } else if (cur && e.type === "resume_discarded") {
-        next = { ...cur, notice: `Started over: ${e.reason}.` };
+        next = { ...cur, notice: t("Started over: {reason}.", { reason: e.reason }) };
       }
       return next ? { ...s, live: { ...s.live, [a.id]: next } } : s;
     }

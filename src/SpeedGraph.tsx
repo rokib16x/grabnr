@@ -1,4 +1,5 @@
 import { bytes, linkColor } from "./format";
+import { t } from "./i18n";
 
 const W = 300;
 const H = 64;
@@ -9,13 +10,13 @@ export function SpeedGraph({ history, names }: { history: number[][]; names: str
     series.map((v, i) => `${((i / 59) * W).toFixed(1)},${(H - (v / max) * (H - 4) - 2).toFixed(1)}`).join(" ");
   return (
     <div>
-      <svg viewBox={`0 0 ${W} ${H}`} className="graph" preserveAspectRatio="none" role="img" aria-label="Speed per link">
+      <svg viewBox={`0 0 ${W} ${H}`} className="graph" preserveAspectRatio="none" role="img" aria-label={t("Speed per link")}>
         {history.map((s, r) => (
           <polyline key={r} points={points(s.slice(-60))} fill="none" stroke={linkColor(names[r] ?? "")} strokeWidth="1.8" vectorEffect="non-scaling-stroke" />
         ))}
       </svg>
       <div className="graph-legend">
-        <span>peak {bytes(max)}/s</span>
+        <span>{t("peak {speed}/s", { speed: bytes(max) })}</span>
         {names.map((n) => (
           <span key={n}>
             <i style={{ background: linkColor(n) }} /> {n}

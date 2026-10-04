@@ -66,13 +66,14 @@ Anything marked built has not yet been proven on two real links with different g
 - [x] First-run onboarding with setup checks
 - [x] History and statistics (bytes per link, estimated time saved), CSV export
 - [~] Thumbnails of finished files in the inspector (macOS Quick Look; none for files it cannot preview)
-- [ ] Localization
+- [x] Localization of the UI: English, Spanish, French, German, Portuguese and Bengali (machine-written, not yet reviewed by native speakers); system notifications and the menu bar tooltip are still English
 
 ## 6. macOS integration
 - [x] Chrome/Brave/Edge extension
-- [x] Firefox extension (built from the same source; one-time pairing). No Safari extension yet
+- [x] Firefox extension (built from the same source; one-time pairing)
+- [~] Safari extension: context menu and popup only (Safari has no downloads API). `extension/tools/safari.sh` makes the Xcode project; it compiles, signing needs your Apple team
 - [x] Launch at login (starts hidden in the menu bar)
-- [~] `grabnr://add?url=` links (works in the packaged app; not testable in dev). No Share Sheet extension or Finder menu yet
+- [~] `grabnr://add?url=` links (works in the packaged app; not testable in dev). A "Download with grabnr" Services menu item for selected text and links (`integrations/macos`, tested headlessly). No Share Sheet extension
 - [x] Quarantine attribute on finished files (setting, on by default)
 - [~] Release workflow builds the app; signing and notarization need an Apple Developer account
 - [ ] Auto-update

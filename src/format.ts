@@ -1,3 +1,4 @@
+import { msg, t } from "./i18n";
 export function bytes(n: number): string {
   const u = ["B", "KB", "MB", "GB", "TB"];
   let i = 0;
@@ -43,7 +44,7 @@ export const linkColor = (name: string) => {
 export const fileName = (url: string, filename: string | null) => {
   if (filename) return filename;
   // A magnet link names the torrent in its `dn` parameter.
-  if (/^magnet:/i.test(url)) return new URLSearchParams(url.slice(url.indexOf("?") + 1)).get("dn") ?? "Torrent";
+  if (/^magnet:/i.test(url)) return new URLSearchParams(url.slice(url.indexOf("?") + 1)).get("dn") ?? t("Torrent");
   try {
     return decodeURIComponent(new URL(url).pathname.split("/").filter(Boolean).pop() ?? url);
   } catch {
@@ -69,14 +70,14 @@ export function fileKind(name: string) {
 
 export type Category = "video" | "audio" | "image" | "document" | "archive" | "disk" | "app" | "other";
 export const CATEGORIES: { id: Category; label: string; icon: string }[] = [
-  { id: "video", label: "Video", icon: "play" },
-  { id: "audio", label: "Audio", icon: "bolt" },
-  { id: "image", label: "Images", icon: "search" },
-  { id: "document", label: "Documents", icon: "folder" },
-  { id: "archive", label: "Archives", icon: "inbox" },
-  { id: "disk", label: "Disk images", icon: "download" },
-  { id: "app", label: "Apps", icon: "sliders" },
-  { id: "other", label: "Other", icon: "link" },
+  { id: "video", label: msg("Video"), icon: "play" },
+  { id: "audio", label: msg("Audio"), icon: "bolt" },
+  { id: "image", label: msg("Images"), icon: "search" },
+  { id: "document", label: msg("Documents"), icon: "folder" },
+  { id: "archive", label: msg("Archives"), icon: "inbox" },
+  { id: "disk", label: msg("Disk images"), icon: "download" },
+  { id: "app", label: msg("Apps"), icon: "sliders" },
+  { id: "other", label: msg("Other"), icon: "link" },
 ];
 
 const CAT_EXT: [Category, RegExp][] = [
