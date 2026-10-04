@@ -673,6 +673,6 @@ pub fn run() {
                 show_main(app);
             }
             #[cfg(not(target_os = "macos"))]
-            let _ = app;
+            let _ = (app, event);
         });
 }

@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+#[cfg(any(target_os = "macos", test))]
 /// Value for the `com.apple.quarantine` attribute: flags, hex timestamp, and the app that wrote it.
 pub fn value(now_secs: u64) -> String {
     format!("0081;{now_secs:x};grabnr;")
