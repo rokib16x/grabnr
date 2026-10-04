@@ -25,3 +25,7 @@ dist-ssr
 
 # Rust
 target
+
+# Playwright
+test-results
+playwright-report
