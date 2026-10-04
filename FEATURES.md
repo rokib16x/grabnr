@@ -62,24 +62,24 @@ Anything marked built has not yet been proven on two real links with different g
 - [x] Command palette (⌘K), shortcuts (⌘N, ⌘,)
 - [x] First-run onboarding with setup checks
 - [x] History and statistics (bytes per link, estimated time saved), CSV export
-- [ ] Video and image thumbnails
+- [~] Thumbnails of finished files in the inspector (macOS Quick Look; none for files it cannot preview)
 - [ ] Localization
 
 ## 6. macOS integration
 - [x] Chrome/Brave/Edge extension
 - [ ] Safari and Firefox extensions
 - [x] Launch at login (starts hidden in the menu bar)
-- [ ] URL scheme handler, Share Sheet extension, Finder context menu
-- [ ] Quarantine attribute handling
+- [~] `grabnr://add?url=` links (works in the packaged app; not testable in dev). No Share Sheet extension or Finder menu yet
+- [x] Quarantine attribute on finished files (setting, on by default)
 - [~] Release workflow builds the app; signing and notarization need an Apple Developer account
 - [ ] Auto-update
 
 ## 7. Automation and developer features
 - [x] CLI on the same engine (`links`, `get`, `spike`)
 - [x] Local REST API for the extension, bound to 127.0.0.1
-- [ ] WebSocket events, event hooks, webhooks
-- [ ] Queue/settings import and export
-- [ ] Diagnostics export and debug panel
+- [~] Webhook: a JSON event for each finished or failed download. No WebSocket events yet
+- [x] Settings export/import (without secrets) and a link-list export of the queue
+- [~] Diagnostics report you can copy (no live debug panel)
 
 ## 8. Security and privacy
 - [x] No telemetry

@@ -211,6 +211,7 @@ export function MainWindow() {
               items={[
                 { label: "Add Download…", onClick: () => setAdding(true) },
                 { label: "Command Palette…", onClick: () => setPalette(true) },
+                { label: "Export link list…", onClick: () => void api.exportQueue().then((p) => p && setToast("Link list saved.")).catch((e) => setToast(String(e))) },
                 "sep",
                 ...AFTER.map((a) => ({ label: `${d.afterAll === a.id ? "✓ " : "    "}When finished: ${a.label}`, onClick: () => void api.setAfterAll(a.id) })),
                 "sep",

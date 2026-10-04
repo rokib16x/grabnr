@@ -51,6 +51,8 @@ export type Settings = {
   sound: boolean;
   schedule: ScheduleRule[];
   after_command: string;
+  webhook_url: string;
+  quarantine: boolean;
 };
 
 export type ScheduleMode = { kind: "pause" } | { kind: "limit"; kbps: number } | { kind: "full" };

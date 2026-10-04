@@ -5,7 +5,7 @@ type Handlers = { item: (i: Item) => void; removed: (id: string) => void; event:
 
 let handlers: Handlers | null = null;
 const items: Item[] = [];
-const settings: Settings = { dest_dir: "/Users/you/Downloads", enabled_links: null, conns_per_route: 8, max_active: 3, speed_limit_kbps: 0, auto_retry: 3, link_rules: {}, skip_cellular: false, proxy: "", onboarded: false, sound: true, schedule: [], after_command: "", token: "d3adbeefcafe0123456789abcdef0123456789abcd" };
+const settings: Settings = { dest_dir: "/Users/you/Downloads", enabled_links: null, conns_per_route: 8, max_active: 3, speed_limit_kbps: 0, auto_retry: 3, link_rules: {}, skip_cellular: false, proxy: "", onboarded: false, sound: true, schedule: [], after_command: "", webhook_url: "", quarantine: true, token: "d3adbeefcafe0123456789abcdef0123456789abcd" };
 const timers = new Map<string, number>();
 let autostart = false;
 
@@ -118,6 +118,9 @@ export const mock = {
         return;
       }
       case "set_after_all": return;
+      case "export_settings": case "export_queue": return;
+      case "get_diagnostics": return "grabnr 0.1.0\nmacos aarch64\n\nConnections\n  en0  Wi-Fi  WiFi  enabled\n\nDownloads: 2 downloading, 0 queued, 1 paused, 3 finished, 1 failed\n";
+      case "thumbnail": return null;
       case "move_download": { const it = items.find((i) => i.id === args.id); if (it) { it.priority += args.toFront ? 1 : -1; handlers?.item({ ...it }); } return; }
       case "pause_download": { const it = items.find((i) => i.id === args.id); if (it) { clearInterval(timers.get(it.id)); it.status = "paused"; handlers?.item({ ...it }); } return; }
       case "resume_download": { const it = items.find((i) => i.id === args.id); if (it) run(it); return; }

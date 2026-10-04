@@ -134,6 +134,12 @@ pub struct Settings {
     /// Shell command for the "run a command when downloads finish" action.
     #[serde(default)]
     pub after_command: String,
+    /// POSTed a small JSON event whenever a download finishes or fails; empty for none.
+    #[serde(default)]
+    pub webhook_url: String,
+    /// Mark finished files as downloaded from the internet (macOS), so Gatekeeper checks apps and installers.
+    #[serde(default = "yes")]
+    pub quarantine: bool,
 }
 
 /// What to do once the queue has finished. Never saved: a forgotten "sleep" must not surprise the next session.
@@ -169,9 +175,19 @@ fn default_auto_retry() -> u32 {
     3
 }
 
+/// `null` and "missing" are different for `Option<Option<T>>`: null clears the value, missing leaves it alone.
+fn double_option<'de, T, D>(d: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Deserialize::deserialize(d).map(Some)
+}
+
 #[derive(Deserialize)]
 pub struct SettingsPatch {
     pub dest_dir: Option<String>,
+    #[serde(default, deserialize_with = "double_option")]
     pub enabled_links: Option<Option<Vec<String>>>,
     pub conns_per_route: Option<usize>,
     pub max_active: Option<usize>,
@@ -184,6 +200,8 @@ pub struct SettingsPatch {
     pub sound: Option<bool>,
     pub schedule: Option<Vec<Rule>>,
     pub after_command: Option<String>,
+    pub webhook_url: Option<String>,
+    pub quarantine: Option<bool>,
 }
 
 pub struct AddRequest {
@@ -228,6 +246,7 @@ pub struct Manager {
     pairing_until: Mutex<Option<Instant>>,
     history: Mutex<Vec<HistoryRec>>,
     /// One speed limit shared by every download; the schedule and settings change it while they run.
+    webhook_error: Mutex<Option<String>>,
     limiter: Arc<Limiter>,
     effect: Mutex<Effect>,
     pub api_ok: Mutex<bool>,
@@ -278,6 +297,8 @@ impl Manager {
                 sound: true,
                 schedule: Vec::new(),
                 after_command: String::new(),
+                webhook_url: String::new(),
+                quarantine: true,
             });
         let mut items: Vec<Item> =
             std::fs::read(data_dir.join("downloads.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
@@ -307,6 +328,7 @@ impl Manager {
             }),
             pairing_until: Mutex::new(None),
             history: Mutex::new(history),
+            webhook_error: Mutex::new(None),
             limiter: Arc::new(Limiter::new(0)),
             effect: Mutex::new(Effect::default()),
             api_ok: Mutex::new(false),
@@ -378,6 +400,12 @@ impl Manager {
             }
             if let Some(v) = p.after_command {
                 g.settings.after_command = v;
+            }
+            if let Some(v) = p.webhook_url {
+                g.settings.webhook_url = v.trim().to_string();
+            }
+            if let Some(v) = p.quarantine {
+                g.settings.quarantine = v;
             }
         }
         self.persist();
@@ -712,6 +740,75 @@ impl Manager {
         Some(delay)
     }
 
+    /// Tell the configured webhook (if any) that a download finished or failed. Fire and forget.
+    fn webhook(self: &Arc<Self>, event: &str, id: &str, error: Option<String>) {
+        let (url, proxy, body) = {
+            let g = self.inner.lock().unwrap();
+            if g.settings.webhook_url.is_empty() {
+                return;
+            }
+            let Some(i) = g.items.iter().find(|i| i.id == id) else { return };
+            let body = serde_json::json!({
+                "event": event,
+                "id": i.id,
+                "name": i.filename,
+                "url": i.url,
+                "bytes": i.total.unwrap_or(i.downloaded),
+                "path": i.path,
+                "error": error,
+                "time": now(),
+            });
+            (g.settings.webhook_url.clone(), Some(g.settings.proxy.clone()).filter(|p| !p.is_empty()), body.to_string())
+        };
+        let me = self.clone();
+        tauri::async_runtime::spawn(async move {
+            let res = grabnr_core::fetch::post_json(&url, body, proxy.as_deref(), Duration::from_secs(10)).await;
+            *me.webhook_error.lock().unwrap() = res.err().map(|e| e.to_string());
+        });
+    }
+
+    pub fn queue_links(&self) -> String {
+        crate::portable::queue_links(&self.inner.lock().unwrap().items)
+    }
+
+    /// Finished file and the folder for its cached preview.
+    pub fn thumbnail_source(&self, id: &str) -> Option<(PathBuf, PathBuf)> {
+        let g = self.inner.lock().unwrap();
+        let i = g.items.iter().find(|i| i.id == id && i.status == Status::Done)?;
+        Some((PathBuf::from(i.path.as_ref()?), self.data_dir.join("thumbs")))
+    }
+
+    pub fn diagnostics(&self, links: &[grabnr_core::Link]) -> String {
+        use crate::report::{build, host_only, Counts, Input};
+        let g = self.inner.lock().unwrap();
+        let count = |s: Status| g.items.iter().filter(|i| i.status == s).count();
+        let errors: Vec<(String, String)> = g
+            .items
+            .iter()
+            .filter(|i| i.status == Status::Error)
+            .take(20)
+            .map(|i| (host_only(&i.url), i.error.clone().unwrap_or_default()))
+            .collect();
+        let link_rows: Vec<(String, String, String)> =
+            links.iter().map(|l| (l.name.clone(), l.label.clone(), format!("{:?}", l.kind))).collect();
+        let webhook_error = self.webhook_error.lock().unwrap().clone();
+        build(&Input {
+            version: env!("CARGO_PKG_VERSION"),
+            os: &format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+            links: &link_rows,
+            settings: &g.settings,
+            counts: Counts {
+                queued: count(Status::Queued),
+                downloading: count(Status::Downloading),
+                paused: count(Status::Paused),
+                done: count(Status::Done),
+                error: count(Status::Error),
+            },
+            errors: &errors,
+            webhook_error: webhook_error.as_deref(),
+        })
+    }
+
     /// Apply the schedule and general limit for the current local time.
     pub fn apply_schedule_now(self: &Arc<Self>) {
         use chrono::{Datelike, Local, Timelike};
@@ -910,8 +1007,12 @@ impl Manager {
                             }
                         }
                     }
+                    if self.inner.lock().unwrap().settings.quarantine {
+                        let _ = crate::quarantine::mark(&path, now());
+                    }
                     self.set_status(id, Status::Done, None);
                     self.add_history(id);
+                    self.webhook("download.completed", id, None);
                     self.maybe_run_after_all();
                     let sound = self.inner.lock().unwrap().settings.sound;
                     let mut note = self.app.notification().builder().title("Download complete").body(name);
@@ -935,6 +1036,7 @@ impl Manager {
                         return;
                     }
                     self.set_status(id, Status::Error, Some(msg.clone()));
+                    self.webhook("download.failed", id, Some(msg.clone()));
                     let _ = self.app.notification().builder().title("Download failed").body(msg).show();
                 }
             }

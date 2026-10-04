@@ -37,3 +37,19 @@ pub async fn fetch_text(
     };
     tokio::time::timeout(Duration::from_secs(20), work).await.map_err(|_| Error::Other("the server did not answer in time".into()))?
 }
+
+/// POST a JSON body to a webhook. Only http(s) URLs are accepted; the call gives up after `timeout`.
+pub async fn post_json(url: &str, body: String, proxy: Option<&str>, timeout: Duration) -> Result<u16> {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(Error::Other("a webhook must be an http or https URL".into()));
+    }
+    let client = client_via_proxy(None, BindMode::None, proxy)?;
+    let send = client.post(url).header("content-type", "application/json").body(body).send();
+    let resp = tokio::time::timeout(timeout, send).await.map_err(|_| Error::Other("the webhook did not answer in time".into()))??;
+    let status = resp.status();
+    if status.is_success() {
+        Ok(status.as_u16())
+    } else {
+        Err(Error::Status(status.as_u16()))
+    }
+}

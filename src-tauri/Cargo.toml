@@ -30,6 +30,9 @@ getrandom = "0.4.3"
 tokio-util = "0.7.19"
 tokio = { version = "1.53.2", features = ["rt-multi-thread", "time"] }
 tauri-plugin-autostart = "2.7.0"
+base64 = "0.22"
+url = "2"
+tauri-plugin-deep-link = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 

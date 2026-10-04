@@ -10,7 +10,16 @@ import type { Item, Link, Live } from "./types";
 
 export function Inspector({ item, live, links }: { item?: Item; live?: Live; links: Link[] }) {
   const [confirming, setConfirming] = useState(false);
+  const [thumb, setThumb] = useState<string | null>(null);
   useEffect(() => setConfirming(false), [item?.id]);
+  // A preview of finished files (macOS Quick Look); nothing when none can be made.
+  useEffect(() => {
+    setThumb(null);
+    if (item?.status !== "done") return;
+    let live = true;
+    api.thumbnail(item.id).then((t) => live && setThumb(t)).catch(() => {});
+    return () => { live = false; };
+  }, [item?.id, item?.status]);
 
   if (!item) {
     return (
@@ -28,7 +37,7 @@ export function Inspector({ item, live, links }: { item?: Item; live?: Live; lin
 
   return (
     <aside className="inspector">
-      <div className="preview"><FileIcon name={name} size={84} /></div>
+      <div className="preview">{thumb ? <img className="thumb" src={thumb} alt="" /> : <FileIcon name={name} size={84} />}</div>
       <h2 title={name}>{name}</h2>
       <a className="url" title={item.url} href={item.url} onClick={(e) => { e.preventDefault(); void navigator.clipboard?.writeText(item.url); }}>{item.url}</a>
 

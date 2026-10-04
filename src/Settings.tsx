@@ -11,6 +11,8 @@ export function SettingsPanel({ settings, apiPort, apiOk, onChange, onClose }: {
   const [report, setReport] = useState<SpikeReport | null>(null);
   const [testing, setTesting] = useState(false);
   const [testErr, setTestErr] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [diag, setDiag] = useState<string | null>(null);
   const [autostart, setAutostart] = useState<boolean | null>(null);
   const [autostartErr, setAutostartErr] = useState<string | null>(null);
 
@@ -103,6 +105,34 @@ export function SettingsPanel({ settings, apiPort, apiOk, onChange, onClose }: {
             <input defaultValue={settings.after_command} placeholder="Optional shell command, for example: open ~/Downloads" spellCheck={false} onBlur={(e) => e.target.value !== settings.after_command && patch({ after_command: e.target.value })} />
           </div>
           <p className="muted">Pick what happens (sleep, quit or run this command) from the ··· menu in the main window. It applies once and is not remembered after you quit.</p>
+        </section>
+
+        <section>
+          <h3>Files and integrations</h3>
+          <label className="link">
+            <input type="checkbox" checked={settings.quarantine} onChange={(e) => patch({ quarantine: e.target.checked })} />
+            Mark finished files as downloaded from the internet (macOS checks apps before they first open)
+          </label>
+          <div className="field">
+            <span>Webhook</span>
+            <input defaultValue={settings.webhook_url} placeholder="Optional URL that receives a JSON event for each finished or failed download" spellCheck={false} onBlur={(e) => e.target.value !== settings.webhook_url && patch({ webhook_url: e.target.value })} />
+          </div>
+          <p className="muted">The webhook receives the file name, link, size and result. Nothing is sent unless you set one.</p>
+        </section>
+
+        <section>
+          <h3>Backup and support</h3>
+          <div className="field">
+            <button onClick={async () => { try { setNote((await api.exportSettings()) ? "Settings exported." : null); } catch (e) { setNote(String(e)); } }}>Export settings…</button>
+            <button onClick={async () => { try { const s = await api.importSettings(); if (s) { onChange(s); setNote("Settings imported."); } } catch (e) { setNote(String(e)); } }}>Import settings…</button>
+            <button onClick={async () => { try { setNote((await api.exportQueue()) ? "Link list saved." : null); } catch (e) { setNote(String(e)); } }}>Export link list…</button>
+          </div>
+          <p className="muted">Settings files leave out the extension token and any proxy password. The link list holds everything not finished yet, one per line, and can be pasted into Add Download.</p>
+          <div className="field">
+            <button onClick={async () => { const r = await api.diagnostics(); setDiag(r); try { await navigator.clipboard.writeText(r); setNote("Report copied. It contains no file names or full links."); } catch { setNote("Select the report below and copy it."); } }}>Copy diagnostics report</button>
+          </div>
+          {diag && <pre className="report-text">{diag}</pre>}
+          {note && <p className="muted small" role="status">{note}</p>}
         </section>
 
         <section>

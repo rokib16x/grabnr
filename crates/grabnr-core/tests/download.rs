@@ -504,3 +504,49 @@ async fn the_limit_can_be_lifted_while_downloading() {
     assert_eq!(std::fs::read(path).unwrap(), expected(0));
     assert!(t.elapsed() < std::time::Duration::from_millis(3000), "still throttled: {:?}", t.elapsed());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn posts_json_to_a_webhook() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let got = Arc::new(std::sync::Mutex::new(String::new()));
+    let g = got.clone();
+    tokio::spawn(async move {
+        let (mut sock, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 8192];
+        let mut all = Vec::new();
+        loop {
+            let n = sock.read(&mut buf).await.unwrap();
+            all.extend_from_slice(&buf[..n]);
+            let text = String::from_utf8_lossy(&all).to_string();
+            if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                let len: usize = head
+                    .to_lowercase()
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length: "))
+                    .and_then(|v| v.trim().parse().ok())
+                    .unwrap_or(0);
+                if body.len() >= len {
+                    *g.lock().unwrap() = text.clone();
+                    break;
+                }
+            }
+        }
+        let _ = sock.write_all(b"HTTP/1.1 204 No Content\r\nconnection: close\r\n\r\n").await;
+    });
+    let status = grabnr_core::fetch::post_json(
+        &format!("http://127.0.0.1:{port}/hook"),
+        r#"{"event":"download.completed"}"#.into(),
+        None,
+        std::time::Duration::from_secs(5),
+    )
+    .await
+    .unwrap();
+    assert_eq!(status, 204);
+    let req = got.lock().unwrap().to_lowercase();
+    assert!(req.starts_with("post /hook"), "{req}");
+    assert!(req.contains("content-type: application/json"));
+    assert!(req.ends_with(r#"{"event":"download.completed"}"#));
+
+    assert!(grabnr_core::fetch::post_json("ftp://x/y", "{}".into(), None, std::time::Duration::from_secs(1)).await.is_err());
+}

@@ -37,6 +37,22 @@ export const api = {
   setAutostart: (enabled: boolean) => call<boolean>("set_autostart", { enabled }),
   allowPairing: () => call<number>("allow_pairing"),
   spike: (only: string[], secs: number) => call<SpikeReport>("run_spike", { only, secs }),
+  exportSettings: async () => {
+    const path = native ? await save({ defaultPath: "grabnr-settings.json", filters: [{ name: "JSON", extensions: ["json"] }] }) : "grabnr-settings.json";
+    if (path) await call<void>("export_settings", { path });
+    return path;
+  },
+  importSettings: async () => {
+    const path = native ? ((await open({ filters: [{ name: "JSON", extensions: ["json"] }] })) as string | null) : null;
+    return path ? await call<Settings>("import_settings", { path }) : null;
+  },
+  exportQueue: async () => {
+    const path = native ? await save({ defaultPath: "grabnr-links.txt", filters: [{ name: "Text", extensions: ["txt"] }] }) : "grabnr-links.txt";
+    if (path) await call<void>("export_queue", { path });
+    return path;
+  },
+  diagnostics: () => call<string>("get_diagnostics"),
+  thumbnail: (id: string) => call<string | null>("thumbnail", { id }),
   pickFolder: async () => (native ? ((await open({ directory: true })) as string | null) : "/Users/you/Documents"),
 };
 

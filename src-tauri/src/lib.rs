@@ -1,8 +1,13 @@
 mod api;
+mod deeplink;
 mod history;
 mod manager;
+mod portable;
+mod quarantine;
 mod queue;
+mod report;
 mod schedule;
+mod thumbs;
 
 use std::sync::Arc;
 
@@ -192,6 +197,40 @@ fn export_history(m: Mgr, path: String) -> Result<(), String> {
     std::fs::write(path, m.history_csv()).map_err(|e| e.to_string())
 }
 
+/// Save settings (without the token or proxy credentials) to a file the user picked.
+#[tauri::command]
+fn export_settings(m: Mgr, path: String) -> Result<(), String> {
+    let v = portable::export_settings(&m.settings());
+    std::fs::write(path, serde_json::to_vec_pretty(&v).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn import_settings(m: Mgr, path: String) -> Result<Settings, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    m.set_settings(portable::import_settings(&text)?);
+    Ok(m.settings())
+}
+
+/// Save the links still to download, one per line.
+#[tauri::command]
+fn export_queue(m: Mgr, path: String) -> Result<(), String> {
+    std::fs::write(path, m.queue_links()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_diagnostics(m: Mgr) -> String {
+    m.diagnostics(&list_links())
+}
+
+/// A preview image of a finished file as a data URL, or nothing when none can be made.
+#[tauri::command]
+async fn thumbnail(m: Mgr<'_>, id: String) -> Result<Option<String>, String> {
+    use base64::Engine as _;
+    let Some((file, cache)) = m.thumbnail_source(&id) else { return Ok(None) };
+    let bytes = tauri::async_runtime::spawn_blocking(move || thumbs::make(&file, &cache, &id)).await.map_err(|e| e.to_string())?;
+    Ok(bytes.map(|b| format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(b))))
+}
+
 #[tauri::command]
 fn reorder_download(m: Mgr, id: String, before: Option<String>) {
     m.reorder(&id, before.as_deref());
@@ -256,6 +295,34 @@ fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<bool, String> {
     let a = app.autolaunch();
     if enabled { a.enable() } else { a.disable() }.map_err(|e| e.to_string())?;
     Ok(a.is_enabled().unwrap_or(enabled))
+}
+
+/// Add the downloads named by `grabnr://` links and bring the window forward.
+fn open_links(app: &tauri::AppHandle, m: &Arc<Manager>, addresses: Vec<String>) {
+    let links: Vec<String> = addresses.iter().flat_map(|a| deeplink::links_from(a)).collect();
+    if links.is_empty() {
+        return;
+    }
+    let (app, m) = (app.clone(), m.clone());
+    tauri::async_runtime::spawn(async move {
+        let mut added = 0;
+        for u in links {
+            let Ok(req) = build_request(u, &AddOptions::default()) else { continue };
+            if let Ok(req) = expand_metalink(req).await {
+                if !m.add(req).1 {
+                    added += 1;
+                }
+            }
+        }
+        if added > 0 {
+            let _ = tauri_plugin_notification::NotificationExt::notification(&app)
+                .builder()
+                .title("Added from a link")
+                .body(format!("{added} download(s) added"))
+                .show();
+        }
+        show_main(&app);
+    });
 }
 
 #[tauri::command]
@@ -415,6 +482,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--hidden"])))
         .setup(|app| {
             let m = Manager::load(app.handle().clone())?;
@@ -429,6 +497,15 @@ pub fn run() {
                     sched.apply_schedule_now();
                 }
             });
+            // grabnr://add?url=… hands downloads to grabnr from a web page or another app.
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let (handle, mgr) = (app.handle().clone(), m.clone());
+                app.deep_link().on_open_url(move |e| open_links(&handle, &mgr, e.urls().iter().map(|u| u.to_string()).collect()));
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    open_links(app.handle(), &m, urls.iter().map(|u| u.to_string()).collect());
+                }
+            }
             app.manage(m);
             // Started by the login item: stay in the menu bar until the user opens the window.
             if std::env::args().any(|a| a == "--hidden") {
@@ -461,6 +538,11 @@ pub fn run() {
             get_history,
             clear_history,
             export_history,
+            export_settings,
+            import_settings,
+            export_queue,
+            get_diagnostics,
+            thumbnail,
             reorder_download,
             set_after_all,
             move_download,
