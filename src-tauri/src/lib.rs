@@ -42,12 +42,15 @@ fn get_state(m: Mgr) -> AppState {
 }
 
 #[tauri::command]
-fn add_download(m: Mgr, url: String, filename: Option<String>, dir: Option<String>) -> Result<String, String> {
+fn add_download(m: Mgr, url: String, filename: Option<String>, dir: Option<String>, checksum: Option<String>) -> Result<String, String> {
     let url = url.trim().to_string();
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err("Enter a full http:// or https:// link".into());
     }
-    Ok(m.inner().add(AddRequest { url, filename, headers: Vec::new(), dir }))
+    if let Some(c) = checksum.as_deref().filter(|c| !c.trim().is_empty()) {
+        grabnr_core::Checksum::parse(c).map_err(|e| e.to_string())?;
+    }
+    Ok(m.inner().add(AddRequest { url, filename, headers: Vec::new(), dir, checksum }))
 }
 
 #[tauri::command]

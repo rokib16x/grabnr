@@ -10,7 +10,7 @@ const call = <T,>(cmd: string, args?: Record<string, unknown>) => (native ? invo
 export const api = {
   state: () => call<AppState>("get_state"),
   links: () => call<LinksResponse>("get_links"),
-  add: (url: string, filename?: string, dir?: string) => call<string>("add_download", { url, filename: filename || null, dir: dir || null }),
+  add: (url: string, filename?: string, dir?: string, checksum?: string) => call<string>("add_download", { url, filename: filename || null, dir: dir || null, checksum: checksum || null }),
   pauseAll: () => call<void>("pause_all"),
   resumeAll: () => call<void>("resume_all"),
   quit: () => call<void>("quit_app"),

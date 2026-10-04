@@ -14,6 +14,10 @@ pub enum Error {
     Cancelled,
     #[error("download failed on every link: {0}")]
     AllFailed(String),
+    #[error("{algo} checksum mismatch: expected {expected}, got {actual}")]
+    ChecksumMismatch { algo: &'static str, expected: String, actual: String },
+    #[error("not enough disk space: {need} bytes needed, {free} free")]
+    DiskFull { need: u64, free: u64 },
     #[error("{0}")]
     Other(String),
 }

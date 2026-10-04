@@ -38,6 +38,9 @@ pub struct Item {
     pub path: Option<String>,
     pub error: Option<String>,
     pub added: u64,
+    /// Expected hash (`sha256:<hex>` etc.) the finished file is verified against.
+    #[serde(default)]
+    pub checksum: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -52,6 +55,7 @@ pub struct ItemView {
     pub path: Option<String>,
     pub error: Option<String>,
     pub added: u64,
+    pub checksum: Option<String>,
 }
 
 impl From<&Item> for ItemView {
@@ -67,6 +71,7 @@ impl From<&Item> for ItemView {
             path: i.path.clone(),
             error: i.error.clone(),
             added: i.added,
+            checksum: i.checksum.clone(),
         }
     }
 }
@@ -79,6 +84,9 @@ pub struct Settings {
     pub conns_per_route: usize,
     pub max_active: usize,
     pub token: String,
+    /// Total download speed cap in KB/s across all links; 0 means unlimited.
+    #[serde(default)]
+    pub speed_limit_kbps: u64,
 }
 
 #[derive(Deserialize)]
@@ -87,6 +95,7 @@ pub struct SettingsPatch {
     pub enabled_links: Option<Option<Vec<String>>>,
     pub conns_per_route: Option<usize>,
     pub max_active: Option<usize>,
+    pub speed_limit_kbps: Option<u64>,
 }
 
 pub struct AddRequest {
@@ -95,6 +104,7 @@ pub struct AddRequest {
     pub headers: Vec<(String, String)>,
     /// Save folder for this download; falls back to the default in settings.
     pub dir: Option<String>,
+    pub checksum: Option<String>,
 }
 
 struct Inner {
@@ -151,6 +161,7 @@ impl Manager {
                 conns_per_route: 8,
                 max_active: 3,
                 token: random_hex(24),
+                speed_limit_kbps: 0,
             });
         let mut items: Vec<Item> =
             std::fs::read(data_dir.join("downloads.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
@@ -205,6 +216,9 @@ impl Manager {
             if let Some(v) = p.max_active {
                 g.settings.max_active = v.clamp(1, 10);
             }
+            if let Some(v) = p.speed_limit_kbps {
+                g.settings.speed_limit_kbps = v;
+            }
         }
         self.persist();
     }
@@ -247,6 +261,7 @@ impl Manager {
                     path: None,
                     error: None,
                     added: now(),
+                    checksum: req.checksum.filter(|c| !c.trim().is_empty()),
                 },
             );
         }
@@ -377,11 +392,11 @@ impl Manager {
     }
 
     fn start(self: &Arc<Self>, item: Item) {
-        let (conns, cancel) = {
+        let (conns, limit, cancel) = {
             let mut g = self.inner.lock().unwrap();
             let c = CancellationToken::new();
             g.cancels.insert(item.id.clone(), c.clone());
-            (g.settings.conns_per_route, c)
+            (g.settings.conns_per_route, g.settings.speed_limit_kbps, c)
         };
         self.set_status(&item.id, Status::Downloading, None);
 
@@ -390,6 +405,16 @@ impl Manager {
         opts.headers = item.headers.clone();
         opts.conns_per_route = conns;
         opts.store = Some(self.store.clone());
+        opts.speed_limit = (limit > 0).then(|| limit * 1024);
+        if let Some(c) = &item.checksum {
+            match grabnr_core::Checksum::parse(c) {
+                Ok(sum) => opts.checksum = Some(sum),
+                Err(e) => {
+                    self.finish(&item.id, Err(e));
+                    return;
+                }
+            }
+        }
 
         let me = self.clone();
         let id = item.id.clone();

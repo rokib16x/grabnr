@@ -7,6 +7,7 @@ const folderName = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
 export function AddDialog({ defaultDir, onClose }: { defaultDir?: string; onClose: () => void }) {
   const [url, setUrl] = useState("");
   const [name, setName] = useState("");
+  const [sum, setSum] = useState("");
   const [dir, setDir] = useState(defaultDir ?? "");
   const [err, setErr] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -25,7 +26,7 @@ export function AddDialog({ defaultDir, onClose }: { defaultDir?: string; onClos
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     try {
-      await api.add(url, name, dir === defaultDir ? undefined : dir);
+      await api.add(url, name, dir === defaultDir ? undefined : dir, sum);
       onClose();
     } catch (x) {
       setErr(String(x));
@@ -52,6 +53,10 @@ export function AddDialog({ defaultDir, onClose }: { defaultDir?: string; onClos
         <div className="form-row">
           <span>Rename</span>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder={guess || "Use the server's file name"} spellCheck={false} aria-label="Rename" />
+        </div>
+        <div className="form-row">
+          <span>Checksum</span>
+          <input value={sum} onChange={(e) => { setSum(e.target.value); setErr(null); }} placeholder="Optional: SHA-256, SHA-1 or MD5" spellCheck={false} aria-label="Checksum" />
         </div>
         <p className="hint">grabnr splits the file into chunks and pulls them over every connection you have enabled in Manage Connections.</p>
 

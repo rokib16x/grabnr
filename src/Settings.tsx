@@ -72,6 +72,10 @@ export function SettingsPanel({ settings, apiPort, apiOk, onChange, onClose }: {
             <input type="number" min={1} max={32} value={settings.conns_per_route} onChange={(e) => patch({ conns_per_route: +e.target.value })} />
           </div>
           <div className="field">
+            <span>Speed limit (MB/s, 0 = none)</span>
+            <input type="number" min={0} max={100000} step={0.5} value={settings.speed_limit_kbps / 1024} onChange={(e) => patch({ speed_limit_kbps: Math.round(Math.max(0, +e.target.value) * 1024) })} />
+          </div>
+          <div className="field">
             <span>Simultaneous downloads</span>
             <input type="number" min={1} max={10} value={settings.max_active} onChange={(e) => patch({ max_active: +e.target.value })} />
           </div>

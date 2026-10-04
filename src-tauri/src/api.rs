@@ -117,7 +117,7 @@ fn handle(m: &Arc<Manager>, mut req: Request) {
                     headers.push((name.into(), v));
                 }
             }
-            let id = m.add(AddRequest { url: b.url, filename: b.filename, headers, dir: None });
+            let id = m.add(AddRequest { url: b.url, filename: b.filename, headers, dir: None, checksum: None });
             reply(req, 200, json!({"id": id}), cors)
         }
         _ => reply(req, 404, json!({"error": "not found"}), cors),

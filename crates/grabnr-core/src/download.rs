@@ -12,6 +12,9 @@ use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
 use crate::bind::{client_pooled, BindMode};
+use crate::checksum::{self, Checksum};
+use crate::disk;
+use crate::limiter::Limiter;
 use crate::error::{Error, Result};
 use crate::interfaces::Link;
 use crate::probe::{probe, sanitize, Probe};
@@ -25,16 +28,18 @@ pub struct Route {
     pub name: String,
     pub link: Option<Link>,
     pub mode: BindMode,
+    /// Cap for this link in bytes per second, shared by all its connections.
+    pub speed_limit: Option<u64>,
 }
 
 impl Route {
     pub fn from_link(link: &Link) -> Self {
-        Route { name: link.name.clone(), link: Some(link.clone()), mode: BindMode::BoundIf }
+        Route { name: link.name.clone(), link: Some(link.clone()), mode: BindMode::BoundIf, speed_limit: None }
     }
 
     /// Let the OS routing table decide (used for single-link downloads and tests).
     pub fn unbound(name: &str) -> Self {
-        Route { name: name.into(), link: None, mode: BindMode::None }
+        Route { name: name.into(), link: None, mode: BindMode::None, speed_limit: None }
     }
 }
 
@@ -49,6 +54,10 @@ pub struct Options {
     /// Without a store nothing is resumable.
     pub store: Option<Arc<Store>>,
     pub max_attempts: u32,
+    /// Cap for the whole download in bytes per second.
+    pub speed_limit: Option<u64>,
+    /// Verified after the last chunk; a mismatch fails the download and discards the partial file.
+    pub checksum: Option<Checksum>,
 }
 
 impl Options {
@@ -62,6 +71,8 @@ impl Options {
             headers: Vec::new(),
             store: None,
             max_attempts: 6,
+            speed_limit: None,
+            checksum: None,
         }
     }
 }
@@ -105,12 +116,14 @@ struct RouteState {
     allowed: AtomicUsize,
     active: AtomicUsize,
     last_throttle: Mutex<Instant>,
+    limit: Option<Limiter>,
 }
 
 struct Shared {
     total: Option<u64>,
     global: AtomicU64,
     routes: Vec<RouteState>,
+    limit: Option<Limiter>,
 }
 
 struct Ctx {
@@ -196,8 +209,10 @@ pub async fn download(opts: Options, cancel: CancellationToken, emit: Emit) -> R
                 allowed: AtomicUsize::new(opts.conns_per_route.max(1)),
                 active: AtomicUsize::new(0),
                 last_throttle: Mutex::new(Instant::now() - Duration::from_secs(60)),
+                limit: r.speed_limit.map(Limiter::new),
             })
             .collect(),
+        limit: opts.speed_limit.map(Limiter::new),
     });
 
     let final_path = match (probe.ranges, probe.total) {
@@ -255,6 +270,7 @@ async fn ranged(
     let ranges = plan(total, chunk_size);
     let resumed_bytes: u64 = done.iter().filter_map(|&i| ranges.get(i)).map(|&(s, e)| e - s + 1).sum();
     shared.global.store(resumed_bytes, Ordering::Relaxed);
+    disk::ensure_space(&opts.dest_dir, total.saturating_sub(resumed_bytes))?;
     let file = OffsetFile::open_staging(staging, total)?;
 
     emit(Event::Started { filename: filename.into(), total: Some(total), chunks: ranges.len(), ranges: true, resumed_chunks: done.len() });
@@ -303,6 +319,7 @@ async fn ranged(
         return Err(Error::AllFailed(ctx.last_err.lock().unwrap().clone()));
     }
 
+    verify_checksum(opts, staging, ctx.store.as_deref().map(|s| (s, id.as_str())))?;
     let dest = unique_path(&opts.dest_dir, filename);
     std::fs::rename(staging, &dest)?;
     if let Some(s) = &opts.store {
@@ -323,6 +340,9 @@ async fn single(
     cancel: CancellationToken,
     emit: Emit,
 ) -> Result<PathBuf> {
+    if let Some(t) = probe.total {
+        disk::ensure_space(&opts.dest_dir, t)?;
+    }
     emit(Event::Started { filename: filename.into(), total: probe.total, chunks: 1, ranges: false, resumed_chunks: 0 });
     let mut req = client.get(&probe.final_url);
     for (k, v) in &opts.headers {
@@ -343,6 +363,8 @@ async fn single(
                 _ = cancel.cancelled() => return Err(Error::Cancelled),
                 next = stream.next() => match next {
                     Some(Ok(b)) => {
+                        if let Some(l) = &shared.limit { l.acquire(b.len() as u64).await; }
+                        if let Some(l) = &shared.routes[0].limit { l.acquire(b.len() as u64).await; }
                         file.write_all_at(&b, pos)?;
                         pos += b.len() as u64;
                         shared.global.fetch_add(b.len() as u64, Ordering::Relaxed);
@@ -358,6 +380,7 @@ async fn single(
     ticker.abort();
     result?;
     file.sync()?;
+    verify_checksum(opts, staging, None)?;
     let dest = unique_path(&opts.dest_dir, filename);
     std::fs::rename(staging, &dest)?;
     Ok(dest)
@@ -481,6 +504,12 @@ async fn fetch_chunk(ctx: &Ctx, client: &Client, route: usize, idx: usize, start
         match next {
             Some(Ok(b)) => {
                 let take = (b.len() as u64).min(end + 1 - pos) as usize;
+                if let Some(l) = &ctx.shared.limit {
+                    l.acquire(take as u64).await;
+                }
+                if let Some(l) = &rs.limit {
+                    l.acquire(take as u64).await;
+                }
                 if let Err(e) = ctx.file.write_all_at(&b[..take], pos) {
                     rollback(got);
                     return Err(FetchErr::Fatal(e.into()));
@@ -557,4 +586,17 @@ fn unique_path(dir: &Path, name: &str) -> PathBuf {
         .map(|n| dir.join(format!("{stem} ({n}){ext}")))
         .find(|c| !c.exists())
         .expect("unbounded range")
+}
+
+/// Check the finished staging file; on a mismatch drop it (and its resume record) so a retry starts clean.
+fn verify_checksum(opts: &Options, staging: &Path, resume: Option<(&Store, &str)>) -> Result<()> {
+    let Some(sum) = &opts.checksum else { return Ok(()) };
+    let res = checksum::verify(sum, staging);
+    if matches!(res, Err(Error::ChecksumMismatch { .. })) {
+        let _ = std::fs::remove_file(staging);
+        if let Some((s, id)) = resume {
+            let _ = s.delete(id);
+        }
+    }
+    res
 }

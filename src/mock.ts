@@ -5,12 +5,12 @@ type Handlers = { item: (i: Item) => void; removed: (id: string) => void; event:
 
 let handlers: Handlers | null = null;
 const items: Item[] = [];
-const settings: Settings = { dest_dir: "/Users/you/Downloads", enabled_links: null, conns_per_route: 8, max_active: 3, token: "d3adbeefcafe0123456789abcdef0123456789abcd" };
+const settings: Settings = { dest_dir: "/Users/you/Downloads", enabled_links: null, conns_per_route: 8, max_active: 3, speed_limit_kbps: 0, token: "d3adbeefcafe0123456789abcdef0123456789abcd" };
 const timers = new Map<string, number>();
 let autostart = false;
 
 function seed(name: string, total: number, status: Item["status"], downloaded: number): Item {
-  const it: Item = { id: Math.random().toString(16).slice(2, 10), url: `https://example.com/files/${name}`, filename: name, dir: settings.dest_dir, status, total, downloaded, path: status === "done" ? `${settings.dest_dir}/${name}` : null, error: null, added: Date.now() / 1000 };
+  const it: Item = { id: Math.random().toString(16).slice(2, 10), url: `https://example.com/files/${name}`, filename: name, dir: settings.dest_dir, status, total, downloaded, path: status === "done" ? `${settings.dest_dir}/${name}` : null, error: null, added: Date.now() / 1000, checksum: null };
   items.unshift(it);
   return it;
 }

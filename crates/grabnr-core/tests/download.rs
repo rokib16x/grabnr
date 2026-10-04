@@ -206,3 +206,56 @@ async fn discards_partial_file_when_server_file_changed() {
     assert_eq!(discarded.load(Ordering::Relaxed), 1);
     assert_eq!(std::fs::read(path).unwrap(), expected(1), "must not mix bytes from two versions");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn speed_limit_slows_the_download() {
+    let s = serve(true).await;
+    let dir = tmp("limit");
+    let mut o = Options::new(format!("http://127.0.0.1:{}/l.bin", s.port), &dir, two_routes());
+    o.speed_limit = Some(3 * 1024 * 1024); // 5 MB at 3 MB/s takes well over a second
+    let t = std::time::Instant::now();
+    let path = download(o, CancellationToken::new(), silent()).await.unwrap();
+    assert!(t.elapsed() >= std::time::Duration::from_millis(1200), "finished in {:?}", t.elapsed());
+    assert_eq!(std::fs::read(path).unwrap(), expected(0));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn per_link_limit_pushes_work_to_the_other_link() {
+    let s = serve(true).await;
+    let dir = tmp("linklimit");
+    let mut routes = two_routes();
+    routes[0].speed_limit = Some(256 * 1024);
+    let by_route = Arc::new(std::sync::Mutex::new([0usize; 2]));
+    let br = by_route.clone();
+    let emit: Arc<dyn Fn(Event) + Send + Sync> = Arc::new(move |e| {
+        if let Event::ChunkDone { route, .. } = e {
+            br.lock().unwrap()[route] += 1;
+        }
+    });
+    let mut o = Options::new(format!("http://127.0.0.1:{}/pl.bin", s.port), &dir, routes);
+    o.conns_per_route = 2;
+    let path = download(o, CancellationToken::new(), emit).await.unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), expected(0));
+    let c = *by_route.lock().unwrap();
+    assert!(c[1] > c[0], "the unlimited link should carry most chunks: {c:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn verifies_checksum_and_rejects_a_bad_one() {
+    let s = serve(true).await;
+    let url = format!("http://127.0.0.1:{}/h.bin", s.port);
+    let good = grabnr_core::checksum::compute_bytes(grabnr_core::Algo::Sha256, &expected(0));
+
+    let dir = tmp("sum-ok");
+    let mut o = Options::new(&url, &dir, two_routes());
+    o.checksum = Some(grabnr_core::Checksum::parse(&good).unwrap());
+    let path = download(o, CancellationToken::new(), silent()).await.unwrap();
+    assert!(path.exists());
+
+    let dir = tmp("sum-bad");
+    let mut o = Options::new(&url, &dir, two_routes());
+    o.checksum = Some(grabnr_core::Checksum::parse(&"0".repeat(64)).unwrap());
+    let err = download(o, CancellationToken::new(), silent()).await.unwrap_err();
+    assert!(matches!(err, Error::ChecksumMismatch { .. }), "{err}");
+    assert!(!dir.join("h.bin").exists() && !dir.join("h.bin.grabnr").exists(), "a corrupt file must not be left behind");
+}

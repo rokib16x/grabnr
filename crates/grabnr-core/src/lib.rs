@@ -2,15 +2,19 @@
 //! whether traffic really leaves through the interface we asked for.
 
 pub mod bind;
+pub mod checksum;
+pub mod disk;
 pub mod download;
 pub mod error;
 pub mod interfaces;
+pub mod limiter;
 pub mod probe;
 pub mod scheduler;
 pub mod spike;
 pub mod store;
 pub mod writer;
 
+pub use checksum::{Algo, Checksum};
 pub use bind::{client_for, client_pooled, BindMode};
 pub use download::{download, Event, Options, Route, Snapshot};
 pub use error::{Error, Result};

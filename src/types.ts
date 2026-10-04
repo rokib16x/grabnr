@@ -11,6 +11,7 @@ export type Item = {
   path: string | null;
   error: string | null;
   added: number;
+  checksum: string | null;
 };
 
 export type RouteStat = { name: string; bytes: number; bytes_per_sec: number; connections: number };
@@ -29,6 +30,7 @@ export type Settings = {
   conns_per_route: number;
   max_active: number;
   token: string;
+  speed_limit_kbps: number;
 };
 
 export type AppState = { downloads: Item[]; settings: Settings; api_port: number; api_ok: boolean };
