@@ -28,8 +28,10 @@ None are required to build. Each one below unlocks one thing.
 | Secret | Unlocks |
 |---|---|
 | `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Signed update packages and `latest.json`, so installed apps can update themselves. Without them the build still works and the app is not updatable in place. |
-| `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY` | Signing the macOS app with your Developer ID certificate (a base64 `.p12`). |
-| `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | Notarization (an app-specific password for the Apple ID). |
+| `MACOS_APP_CERT_P12`, `MACOS_CERT_PASSWORD`, `MACOS_KEYCHAIN_PASSWORD` | Signing the macOS app with your Developer ID Application certificate (a base64 `.p12`; the keychain password is any random string). |
+| `NOTARY_KEY_ID`, `NOTARY_ISSUER_ID`, `NOTARY_KEY_P8` | Notarization with an App Store Connect API key (the `.p8`, base64). |
+
+These are the same names the hidnr repository uses. GitHub never shows secret values back, so they are set once per repository.
 
 ### Update signing key
 
