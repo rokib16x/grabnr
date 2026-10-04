@@ -12,6 +12,8 @@ use tauri::{AppHandle, Emitter, Manager as _};
 use tauri_plugin_notification::NotificationExt;
 use tokio_util::sync::CancellationToken;
 
+use crate::history::{self, HistoryRec, Stats};
+
 pub const API_PORT: u16 = 17653;
 
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug)]
@@ -53,6 +55,9 @@ pub struct Item {
     /// Other URLs serving the same file (from the add dialog or a Metalink file).
     #[serde(default)]
     pub mirrors: Vec<String>,
+    /// Bytes per link, running time and peak speed, for the history and statistics.
+    #[serde(default)]
+    pub stats: Stats,
 }
 
 #[derive(Serialize, Clone)]
@@ -115,6 +120,16 @@ pub struct Settings {
     /// Proxy for every download that has none of its own; empty means direct.
     #[serde(default)]
     pub proxy: String,
+    /// The first-run setup has been shown.
+    #[serde(default)]
+    pub onboarded: bool,
+    /// Play the system sound with the "download complete" notification.
+    #[serde(default = "yes")]
+    pub sound: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -146,6 +161,8 @@ pub struct SettingsPatch {
     pub link_rules: Option<HashMap<String, LinkRule>>,
     pub skip_cellular: Option<bool>,
     pub proxy: Option<String>,
+    pub onboarded: Option<bool>,
+    pub sound: Option<bool>,
 }
 
 pub struct AddRequest {
@@ -168,6 +185,13 @@ struct Inner {
     speeds: HashMap<String, f64>,
     /// Failed downloads waiting out their retry delay.
     retry_at: HashMap<String, Instant>,
+    /// The current run of each running download (engine byte counters restart every run).
+    runs: HashMap<String, Run>,
+}
+
+struct Run {
+    started: Instant,
+    seen: HashMap<String, u64>,
 }
 
 pub struct Manager {
@@ -176,6 +200,7 @@ pub struct Manager {
     store: Arc<Store>,
     inner: Mutex<Inner>,
     pairing_until: Mutex<Option<Instant>>,
+    history: Mutex<Vec<HistoryRec>>,
     pub api_ok: Mutex<bool>,
 }
 
@@ -220,6 +245,8 @@ impl Manager {
                 link_rules: HashMap::new(),
                 skip_cellular: false,
                 proxy: String::new(),
+                onboarded: false,
+                sound: true,
             });
         let mut items: Vec<Item> =
             std::fs::read(data_dir.join("downloads.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
@@ -229,12 +256,14 @@ impl Manager {
                 i.status = Status::Paused;
             }
         }
+        let history: Vec<HistoryRec> = std::fs::read(data_dir.join("history.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
         let m = Arc::new(Manager {
             app,
             data_dir,
             store,
-            inner: Mutex::new(Inner { items, settings, cancels: HashMap::new(), removing: Vec::new(), speeds: HashMap::new(), retry_at: HashMap::new() }),
+            inner: Mutex::new(Inner { items, settings, cancels: HashMap::new(), removing: Vec::new(), speeds: HashMap::new(), retry_at: HashMap::new(), runs: HashMap::new() }),
             pairing_until: Mutex::new(None),
+            history: Mutex::new(history),
             api_ok: Mutex::new(false),
         });
         m.persist();
@@ -291,6 +320,12 @@ impl Manager {
             }
             if let Some(v) = p.proxy {
                 g.settings.proxy = v.trim().to_string();
+            }
+            if let Some(v) = p.onboarded {
+                g.settings.onboarded = v;
+            }
+            if let Some(v) = p.sound {
+                g.settings.sound = v;
             }
         }
         self.persist();
@@ -350,6 +385,7 @@ impl Manager {
                     retries: 0,
                     proxy: req.proxy.filter(|p| !p.trim().is_empty()),
                     mirrors: req.mirrors,
+                    stats: Stats::default(),
                 },
             );
         }
@@ -522,6 +558,7 @@ impl Manager {
             let mut g = self.inner.lock().unwrap();
             let c = CancellationToken::new();
             g.cancels.insert(item.id.clone(), c.clone());
+            g.runs.insert(item.id.clone(), Run { started: Instant::now(), seen: HashMap::new() });
             (g.settings.conns_per_route, g.settings.speed_limit_kbps, g.settings.proxy.clone(), c)
         };
         self.set_status(&item.id, Status::Downloading, None);
@@ -562,7 +599,8 @@ impl Manager {
         let mut speed = None;
         {
             let mut g = self.inner.lock().unwrap();
-            if let Some(i) = g.items.iter_mut().find(|i| i.id == id) {
+            let Inner { items, runs, .. } = &mut *g;
+            if let Some(i) = items.iter_mut().find(|i| i.id == id) {
                 match &e {
                     Event::Started { filename, total, .. } => {
                         i.filename.get_or_insert_with(|| filename.clone());
@@ -572,6 +610,9 @@ impl Manager {
                     Event::Progress(s) => {
                         i.downloaded = s.downloaded;
                         speed = Some(s.bytes_per_sec);
+                        if let Some(run) = runs.get_mut(id) {
+                            i.stats.add_progress(&mut run.seen, &s.routes);
+                        }
                     }
                     _ => {}
                 }
@@ -607,11 +648,63 @@ impl Manager {
         Some(delay)
     }
 
+    fn add_history(&self, id: &str) {
+        let rec = {
+            let g = self.inner.lock().unwrap();
+            g.items.iter().find(|i| i.id == id).map(|i| {
+                history::record(&i.id, i.filename.as_deref().unwrap_or(&i.url), &i.url, i.total.unwrap_or(i.downloaded), now(), &i.stats)
+            })
+        };
+        if let Some(rec) = rec {
+            let mut h = self.history.lock().unwrap();
+            h.retain(|r| r.id != rec.id);
+            h.push(rec);
+            let excess = h.len().saturating_sub(5000);
+            h.drain(..excess);
+            if let Ok(b) = serde_json::to_vec_pretty(&*h) {
+                let _ = write_private(&self.data_dir.join("history.json"), &b);
+            }
+        }
+    }
+
+    pub fn history(&self) -> Vec<HistoryRec> {
+        let mut h = self.history.lock().unwrap().clone();
+        h.reverse();
+        h
+    }
+
+    pub fn clear_history(&self) {
+        self.history.lock().unwrap().clear();
+        let _ = std::fs::remove_file(self.data_dir.join("history.json"));
+    }
+
+    pub fn history_csv(&self) -> String {
+        history::to_csv(&self.history())
+    }
+
+    /// Combined progress (0-100) of everything downloading with a known size, for the Dock icon.
+    pub fn overall_progress(&self) -> Option<u64> {
+        let g = self.inner.lock().unwrap();
+        let (mut done, mut total) = (0u64, 0u64);
+        for i in g.items.iter().filter(|i| i.status == Status::Downloading) {
+            if let Some(t) = i.total {
+                total += t;
+                done += i.downloaded.min(t);
+            }
+        }
+        (total > 0).then(|| done * 100 / total)
+    }
+
     fn finish(self: &Arc<Self>, id: &str, res: grabnr_core::Result<PathBuf>) {
         let removed = {
             let mut g = self.inner.lock().unwrap();
             g.cancels.remove(id);
             g.speeds.remove(id);
+            if let Some(secs) = g.runs.remove(id).map(|r| r.started.elapsed().as_secs_f64()) {
+                if let Some(i) = g.items.iter_mut().find(|i| i.id == id) {
+                    i.stats.active_secs += secs;
+                }
+            }
             g.removing.iter().position(|r| r == id).map(|p| g.removing.remove(p)).is_some()
         };
         if !removed {
@@ -630,7 +723,13 @@ impl Manager {
                         }
                     }
                     self.set_status(id, Status::Done, None);
-                    let _ = self.app.notification().builder().title("Download complete").body(name).show();
+                    self.add_history(id);
+                    let sound = self.inner.lock().unwrap().settings.sound;
+                    let mut note = self.app.notification().builder().title("Download complete").body(name);
+                    if sound {
+                        note = note.sound("default");
+                    }
+                    let _ = note.show();
                 }
                 Err(grabnr_core::Error::Cancelled) => self.set_status(id, Status::Paused, None),
                 Err(e) => {
@@ -685,7 +784,7 @@ mod tests {
     use super::*;
 
     fn item(id: &str, priority: i32, status: Status) -> Item {
-        Item { id: id.into(), url: format!("https://x/{id}"), filename: None, dir: ".".into(), headers: vec![], status, total: None, downloaded: 0, path: None, error: None, added: 0, checksum: None, priority, retries: 0, proxy: None, mirrors: vec![] }
+        Item { id: id.into(), url: format!("https://x/{id}"), filename: None, dir: ".".into(), headers: vec![], status, total: None, downloaded: 0, path: None, error: None, added: 0, checksum: None, priority, retries: 0, proxy: None, mirrors: vec![], stats: Stats::default() }
     }
 
     #[test]

@@ -47,6 +47,8 @@ export type Settings = {
   link_rules: Record<string, LinkRule>;
   skip_cellular: boolean;
   proxy: string;
+  onboarded: boolean;
+  sound: boolean;
 };
 
 export type AppState = { downloads: Item[]; settings: Settings; api_port: number; api_ok: boolean };
@@ -81,4 +83,15 @@ export type Live = {
   resumedChunks: number;
   history: number[][]; // per route, bytes/s samples
   notice: string | null;
+};
+
+export type HistoryRec = {
+  id: string;
+  name: string;
+  url: string;
+  bytes: number;
+  finished: number;
+  active_secs: number;
+  link_bytes: Record<string, number>;
+  saved_secs: number;
 };

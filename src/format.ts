@@ -64,3 +64,36 @@ export function fileKind(name: string) {
   const hit = KINDS.find(([re]) => re.test(ext));
   return { from: hit?.[1] ?? "#64a8ff", to: hit?.[2] ?? "#2f7cf6", label: ext.length > 0 && ext.length <= 4 && ext !== name.toLowerCase() ? ext.toUpperCase() : "FILE" };
 }
+
+export type Category = "video" | "audio" | "image" | "document" | "archive" | "disk" | "app" | "other";
+export const CATEGORIES: { id: Category; label: string; icon: string }[] = [
+  { id: "video", label: "Video", icon: "play" },
+  { id: "audio", label: "Audio", icon: "bolt" },
+  { id: "image", label: "Images", icon: "search" },
+  { id: "document", label: "Documents", icon: "folder" },
+  { id: "archive", label: "Archives", icon: "inbox" },
+  { id: "disk", label: "Disk images", icon: "download" },
+  { id: "app", label: "Apps", icon: "sliders" },
+  { id: "other", label: "Other", icon: "link" },
+];
+
+const CAT_EXT: [Category, RegExp][] = [
+  ["video", /^(mp4|mkv|mov|avi|webm|m4v|wmv|flv)$/],
+  ["audio", /^(mp3|m4a|flac|wav|aac|ogg|opus)$/],
+  ["image", /^(png|jpe?g|gif|webp|heic|svg|tiff?|bmp)$/],
+  ["document", /^(pdf|docx?|xlsx?|pptx?|txt|md|epub|csv|rtf)$/],
+  ["archive", /^(zip|rar|7z|tar|gz|tgz|bz2|xz|zst)$/],
+  ["disk", /^(dmg|iso|img|pkg)$/],
+  ["app", /^(exe|msi|deb|rpm|apk|appimage|app)$/],
+];
+export function categoryOf(name: string): Category {
+  const ext = (name.split(".").pop() ?? "").toLowerCase();
+  return CAT_EXT.find(([, re]) => re.test(ext))?.[0] ?? "other";
+}
+
+export function duration(secs: number): string {
+  const s = Math.round(secs);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}

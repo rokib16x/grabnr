@@ -5,7 +5,7 @@ type Handlers = { item: (i: Item) => void; removed: (id: string) => void; event:
 
 let handlers: Handlers | null = null;
 const items: Item[] = [];
-const settings: Settings = { dest_dir: "/Users/you/Downloads", enabled_links: null, conns_per_route: 8, max_active: 3, speed_limit_kbps: 0, auto_retry: 3, link_rules: {}, skip_cellular: false, proxy: "", token: "d3adbeefcafe0123456789abcdef0123456789abcd" };
+const settings: Settings = { dest_dir: "/Users/you/Downloads", enabled_links: null, conns_per_route: 8, max_active: 3, speed_limit_kbps: 0, auto_retry: 3, link_rules: {}, skip_cellular: false, proxy: "", onboarded: false, sound: true, token: "d3adbeefcafe0123456789abcdef0123456789abcd" };
 const timers = new Map<string, number>();
 let autostart = false;
 
@@ -96,6 +96,17 @@ export const mock = {
         const base = String(args.url).replace(/\/[^/]*$/, "");
         return ["release-1.0.zip", "release-1.1.zip", "manual.pdf", "demo.mp4", "notes.txt"].map((f) => ({ url: `${base}/${f}`, text: f }));
       }
+      case "get_history": {
+        const day = 86400;
+        const now = Date.now() / 1000;
+        return [
+          { id: "h1", name: "Beautiful Nature 4K.mp4", url: "https://example.com/a.mp4", bytes: 2.4e9, finished: now - 3600, active_secs: 95, link_bytes: { en0: 8e8, en5: 1.1e9, en7: 5e8 }, saved_secs: 61 },
+          { id: "h2", name: "Figma Setup.dmg", url: "https://example.com/f.dmg", bytes: 5.2e8, finished: now - day, active_secs: 22, link_bytes: { en0: 2e8, en5: 3e8 }, saved_secs: 14 },
+          { id: "h3", name: "UI Inspiration Pack.zip", url: "https://example.com/u.zip", bytes: 8.5e8, finished: now - 3 * day, active_secs: 41, link_bytes: { en5: 9e8 }, saved_secs: 0 },
+        ];
+      }
+      case "clear_history": return;
+      case "export_history": return;
       case "move_download": { const it = items.find((i) => i.id === args.id); if (it) { it.priority += args.toFront ? 1 : -1; handlers?.item({ ...it }); } return; }
       case "pause_download": { const it = items.find((i) => i.id === args.id); if (it) { clearInterval(timers.get(it.id)); it.status = "paused"; handlers?.item({ ...it }); } return; }
       case "resume_download": { const it = items.find((i) => i.id === args.id); if (it) run(it); return; }

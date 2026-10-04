@@ -30,7 +30,8 @@
             "sidebar"
           ],
           "state": "followsWindowActiveState"
-        }
+        },
+        "dragDropEnabled": false
       },
       {
         "label": "tray",

@@ -1,4 +1,5 @@
 mod api;
+mod history;
 mod manager;
 
 use std::sync::Arc;
@@ -158,6 +159,22 @@ async fn grab_links(m: Mgr<'_>, url: String) -> Result<Vec<grabnr_core::links::P
         return Err("No links found on that page".into());
     }
     Ok(links)
+}
+
+#[tauri::command]
+fn get_history(m: Mgr) -> Vec<history::HistoryRec> {
+    m.history()
+}
+
+#[tauri::command]
+fn clear_history(m: Mgr) {
+    m.clear_history();
+}
+
+/// Write the history as CSV to a path the user picked in a save dialog.
+#[tauri::command]
+fn export_history(m: Mgr, path: String) -> Result<(), String> {
+    std::fs::write(path, m.history_csv()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -321,12 +338,14 @@ fn build_tray(app: &tauri::AppHandle, m: Arc<Manager>) -> tauri::Result<()> {
         })
         .build(app)?;
 
+    let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
         let mut last = String::new();
         loop {
             tick.tick().await;
             let (n, bps) = m.summary();
+            dock_progress(&app_handle, n, m.overall_progress());
             let text = if n == 0 { "Idle".to_string() } else { format!("{n} downloading · {}", human_rate(bps)) };
             if text != last {
                 let _ = status.set_text(&text);
@@ -338,6 +357,19 @@ fn build_tray(app: &tauri::AppHandle, m: Arc<Manager>) -> tauri::Result<()> {
         }
     });
     Ok(())
+}
+
+/// Dock icon: a progress bar and the number of running downloads.
+fn dock_progress(app: &tauri::AppHandle, running: usize, pct: Option<u64>) {
+    use tauri::window::{ProgressBarState, ProgressBarStatus};
+    let Some(w) = app.get_webview_window("main") else { return };
+    let state = match (running, pct) {
+        (0, _) => ProgressBarState { status: Some(ProgressBarStatus::None), progress: None },
+        (_, Some(p)) => ProgressBarState { status: Some(ProgressBarStatus::Normal), progress: Some(p.min(100)) },
+        (_, None) => ProgressBarState { status: Some(ProgressBarStatus::Indeterminate), progress: None },
+    };
+    let _ = w.set_progress_bar(state);
+    let _ = w.set_badge_label(if running == 0 { None } else { Some(running.to_string()) });
 }
 
 #[tauri::command]
@@ -392,6 +424,9 @@ pub fn run() {
             add_download,
             add_batch,
             grab_links,
+            get_history,
+            clear_history,
+            export_history,
             move_download,
             pause_download,
             resume_download,

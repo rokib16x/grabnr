@@ -96,6 +96,10 @@ export function SettingsPanel({ settings, apiPort, apiOk, onChange, onClose }: {
             <input type="checkbox" checked={!!autostart} disabled={autostart === null} onChange={(e) => toggleAutostart(e.target.checked)} />
             Launch at login
           </label>
+          <label className="link">
+            <input type="checkbox" checked={settings.sound} onChange={(e) => patch({ sound: e.target.checked })} />
+            Play a sound when a download finishes
+          </label>
           <p className="muted">
             Starts hidden in the menu bar so the browser extension always has somewhere to send downloads. Closing the window keeps grabnr running; quit it from the menu bar icon.
           </p>

@@ -1,55 +1,153 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, onOpenSettings } from "./api";
 import { AddDialog } from "./AddDialog";
-import { DownloadRow } from "./DownloadRow";
+import { CommandPalette, type Command } from "./CommandPalette";
+import { DownloadRow, progressOf } from "./DownloadRow";
+import { fileName } from "./format";
+import { HistoryView } from "./HistoryView";
 import { Icon } from "./icons";
 import { Inspector } from "./Inspector";
 import { MoreMenu } from "./Menu";
+import { Onboarding } from "./Onboarding";
 import { SettingsPanel } from "./Settings";
-import { matchFilter, Sidebar, type Filter } from "./Sidebar";
+import { filterTitle, matchFilter, Sidebar, type Filter } from "./Sidebar";
 import { useDownloads } from "./store";
-import { fileName } from "./format";
-import type { Settings } from "./types";
+import type { Item, Live, Settings } from "./types";
 
-const TITLES: Record<Filter, string> = { all: "All Downloads", downloading: "Downloading", done: "Completed", paused: "Paused", error: "Failed" };
+type Sort = "newest" | "oldest" | "name" | "size" | "progress";
+const SORTS: { id: Sort; label: string }[] = [
+  { id: "newest", label: "Newest first" },
+  { id: "oldest", label: "Oldest first" },
+  { id: "name", label: "Name" },
+  { id: "size", label: "Size" },
+  { id: "progress", label: "Progress" },
+];
+
+function sorter(sort: Sort, live: Record<string, Live>) {
+  const name = (i: Item) => fileName(i.url, i.filename).toLowerCase();
+  const pct = (i: Item) => progressOf(i, live[i.id]).pct;
+  switch (sort) {
+    case "oldest": return (a: Item, b: Item) => a.added - b.added;
+    case "name": return (a: Item, b: Item) => name(a).localeCompare(name(b));
+    case "size": return (a: Item, b: Item) => (b.total ?? 0) - (a.total ?? 0);
+    case "progress": return (a: Item, b: Item) => pct(b) - pct(a);
+    default: return (a: Item, b: Item) => b.added - a.added;
+  }
+}
+
+function remembered<T extends string>(key: string, fallback: T, allowed: readonly T[]): T {
+  try {
+    const v = localStorage.getItem(key) as T | null;
+    return v && allowed.includes(v) ? v : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/** URLs in dropped text or a dropped text file; one per line or whitespace separated. */
+async function urlsFromDrop(dt: DataTransfer): Promise<string> {
+  const parts: string[] = [dt.getData("text/uri-list"), dt.getData("text/plain")];
+  for (const f of Array.from(dt.files)) {
+    if (/\.(txt|list|csv|urls?)$/i.test(f.name) && f.size < 2_000_000) parts.push(await f.text());
+  }
+  return parts.join("\n");
+}
 
 export function MainWindow() {
   const d = useDownloads();
   const [filter, setFilter] = useState<Filter>("all");
+  const [sort, setSort] = useState<Sort>(() => remembered("grabnr.sort", "newest", SORTS.map((s) => s.id)));
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [palette, setPalette] = useState(false);
+  const [dropping, setDropping] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const [skipOnboarding, setSkipOnboarding] = useState(false);
 
   useEffect(() => onOpenSettings(() => setSettingsOpen(true)), []);
+  useEffect(() => { try { localStorage.setItem("grabnr.sort", sort); } catch { /* storage may be unavailable */ } }, [sort]);
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 3500);
+    return () => clearTimeout(t);
+  }, [toast]);
 
-  // Paste a link anywhere in the window to add it.
+  const addText = useCallback(async (text: string) => {
+    try {
+      const r = await api.addBatch(text);
+      setToast(r.added ? `Added ${r.added} ${r.added === 1 ? "download" : "downloads"}${r.duplicates ? `, ${r.duplicates} already in the list` : ""}.` : r.duplicates ? "Already in your list." : "No links added.");
+    } catch (e) {
+      setToast(String(e));
+    }
+  }, []);
+
+  // Paste a link anywhere in the window to add it; keyboard shortcuts; drag links or text files onto the window.
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
       const t = e.clipboardData?.getData("text")?.trim() ?? "";
-      if (/^https?:\/\/\S+$/i.test(t)) api.add(t).catch(() => {});
+      if (/^https?:\/\/\S+/i.test(t)) void addText(t);
     };
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "n") { e.preventDefault(); setAdding(true); }
-      if ((e.metaKey || e.ctrlKey) && e.key === ",") { e.preventDefault(); setSettingsOpen(true); }
+      if (!(e.metaKey || e.ctrlKey)) return;
+      const k = e.key.toLowerCase();
+      if (k === "n") { e.preventDefault(); setAdding(true); }
+      if (k === ",") { e.preventDefault(); setSettingsOpen(true); }
+      if (k === "k") { e.preventDefault(); setPalette((p) => !p); }
+    };
+    let depth = 0;
+    const hasPayload = (e: DragEvent) => !!e.dataTransfer && (e.dataTransfer.types.includes("Files") || e.dataTransfer.types.includes("text/uri-list") || e.dataTransfer.types.includes("text/plain"));
+    const enter = (e: DragEvent) => { if (hasPayload(e)) { depth++; setDropping(true); } };
+    const over = (e: DragEvent) => { if (hasPayload(e)) e.preventDefault(); };
+    const leave = () => { depth = Math.max(0, depth - 1); if (depth === 0) setDropping(false); };
+    const drop = async (e: DragEvent) => {
+      e.preventDefault();
+      depth = 0;
+      setDropping(false);
+      if (e.dataTransfer) await addText(await urlsFromDrop(e.dataTransfer));
     };
     window.addEventListener("paste", onPaste);
     window.addEventListener("keydown", onKey);
-    return () => { window.removeEventListener("paste", onPaste); window.removeEventListener("keydown", onKey); };
-  }, []);
+    window.addEventListener("dragenter", enter);
+    window.addEventListener("dragover", over);
+    window.addEventListener("dragleave", leave);
+    window.addEventListener("drop", drop);
+    return () => {
+      window.removeEventListener("paste", onPaste);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("dragenter", enter);
+      window.removeEventListener("dragover", over);
+      window.removeEventListener("dragleave", leave);
+      window.removeEventListener("drop", drop);
+    };
+  }, [addText]);
 
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return d.items.filter((i) => matchFilter(filter, i) && (!q || fileName(i.url, i.filename).toLowerCase().includes(q) || i.url.toLowerCase().includes(q)));
-  }, [d.items, filter, query]);
+    return d.items
+      .filter((i) => matchFilter(filter, i) && (!q || fileName(i.url, i.filename).toLowerCase().includes(q) || i.url.toLowerCase().includes(q)))
+      .sort(sorter(sort, d.live));
+  }, [d.items, d.live, filter, query, sort]);
 
   // Keep something selected so the inspector is never blank while there are downloads.
   const current = d.items.find((i) => i.id === selected) ?? shown.find((i) => i.status === "downloading") ?? shown[0];
   const hasDone = d.items.some((i) => i.status === "done");
   const canPause = d.items.some((i) => i.status === "downloading" || i.status === "queued");
   const canResume = d.items.some((i) => i.status === "paused");
+  const doneCount = d.items.filter((i) => i.status === "done").length;
+
+  const commands: Command[] = useMemo(() => [
+    { id: "add", label: "Add Download…", hint: "⌘N", icon: "plus", run: () => setAdding(true) },
+    { id: "pause", label: "Pause All", icon: "pause", run: () => void api.pauseAll() },
+    { id: "resume", label: "Resume All", icon: "play", run: () => void api.resumeAll() },
+    { id: "clear", label: "Remove Completed from the List", icon: "trash", run: () => d.items.filter((i) => i.status === "done").forEach((i) => void api.remove(i.id, false)) },
+    { id: "prefs", label: "Preferences…", hint: "⌘,", icon: "sliders", run: () => setSettingsOpen(true) },
+    ...(["all", "downloading", "done", "paused", "history"] as Filter[]).map((f) => ({ id: `go-${f}`, label: `Show ${filterTitle(f)}`, icon: "inbox", run: () => setFilter(f) })),
+    ...d.items.map((i) => ({ id: `item-${i.id}`, label: fileName(i.url, i.filename), hint: i.status, icon: "download", run: () => { setFilter("all"); setSelected(i.id); } })),
+  ], [d.items]);
 
   return (
     <div className="app">
@@ -58,7 +156,7 @@ export function MainWindow() {
       <section className="main">
         <header data-tauri-drag-region>
           <div className="title" data-tauri-drag-region>
-            <h1>{TITLES[filter]}</h1>
+            <h1>{filterTitle(filter)}</h1>
             <p>{d.items.length} {d.items.length === 1 ? "item" : "items"}{d.active.length ? ` · ${d.active.length} downloading` : ""}</p>
           </div>
           <div className="tools">
@@ -66,7 +164,16 @@ export function MainWindow() {
             <button className="round" aria-label="Resume all" title="Resume all" disabled={!canResume} onClick={() => api.resumeAll()}><Icon name="play" /></button>
             <button className="round" aria-label="Pause all" title="Pause all" disabled={!canPause} onClick={() => api.pauseAll()}><Icon name="pause" /></button>
             <button className="round" aria-label="Remove completed" title="Remove completed from the list" disabled={!hasDone} onClick={() => d.items.filter((i) => i.status === "done").forEach((i) => api.remove(i.id, false))}><Icon name="trash" /></button>
-            <MoreMenu items={[{ label: "Add Download…", onClick: () => setAdding(true) }, { label: "Preferences…", onClick: () => setSettingsOpen(true) }]} />
+            <MoreMenu
+              items={[
+                { label: "Add Download…", onClick: () => setAdding(true) },
+                { label: "Command Palette…", onClick: () => setPalette(true) },
+                "sep",
+                ...SORTS.map((s) => ({ label: `${sort === s.id ? "✓ " : "    "}Sort by ${s.label}`, onClick: () => setSort(s.id) })),
+                "sep",
+                { label: "Preferences…", onClick: () => setSettingsOpen(true) },
+              ]}
+            />
           </div>
           <label className="search">
             <Icon name="search" size={15} />
@@ -74,31 +181,41 @@ export function MainWindow() {
           </label>
         </header>
 
-        <div className="content">
-          <main>
-            {shown.length === 0 ? (
-              <div className="empty">
-                <img src="/grabnr.svg" alt="" width="64" height="64" />
-                <h2>{d.items.length ? "Nothing here" : "No downloads yet"}</h2>
-                <p>Paste a link anywhere in this window, press <b>+</b>, or install the browser extension so downloads from Chrome and Brave start here.</p>
-                {!d.items.length && <button className="primary" onClick={() => setAdding(true)}>Add Download</button>}
-              </div>
-            ) : (
-              <ul className="list">
-                {shown.map((i) => (
-                  <DownloadRow key={i.id} item={i} live={d.live[i.id]} selected={current?.id === i.id} onSelect={() => setSelected(i.id)} />
-                ))}
-              </ul>
-            )}
-          </main>
-          <Inspector item={current} live={current ? d.live[current.id] : undefined} links={d.links} />
-        </div>
+        {filter === "history" ? (
+          <div className="content single">
+            <main><HistoryView links={d.links} refreshKey={doneCount} /></main>
+          </div>
+        ) : (
+          <div className="content">
+            <main>
+              {shown.length === 0 ? (
+                <div className="empty">
+                  <img src="/grabnr.svg" alt="" width="64" height="64" />
+                  <h2>{d.items.length ? "Nothing here" : "No downloads yet"}</h2>
+                  <p>Paste a link anywhere in this window, drop links or a text file here, press <b>+</b>, or install the browser extension so downloads from Chrome and Brave start here.</p>
+                  {!d.items.length && <button className="primary" onClick={() => setAdding(true)}>Add Download</button>}
+                </div>
+              ) : (
+                <ul className="list">
+                  {shown.map((i) => (
+                    <DownloadRow key={i.id} item={i} live={d.live[i.id]} selected={current?.id === i.id} onSelect={() => setSelected(i.id)} />
+                  ))}
+                </ul>
+              )}
+            </main>
+            <Inspector item={current} live={current ? d.live[current.id] : undefined} links={d.links} />
+          </div>
+        )}
       </section>
 
+      {dropping && <div className="drop-overlay" aria-hidden="true"><div><Icon name="download" size={28} /><p>Drop links to download</p></div></div>}
+      {toast && <div className="toast" role="status">{toast}</div>}
       {adding && <AddDialog defaultDir={d.app?.settings.dest_dir} onClose={() => setAdding(false)} />}
+      {palette && <CommandPalette commands={commands} onClose={() => setPalette(false)} />}
       {settingsOpen && d.app && (
         <SettingsPanel settings={d.app.settings} apiPort={d.app.api_port} apiOk={d.app.api_ok} onChange={(settings: Settings) => d.setApp({ ...d.app!, settings })} onClose={() => setSettingsOpen(false)} />
       )}
+      {d.app && !d.app.settings.onboarded && !skipOnboarding && <Onboarding app={d.app} onDone={() => { setSkipOnboarding(true); d.setApp({ ...d.app!, settings: { ...d.app!.settings, onboarded: true } }); }} />}
     </div>
   );
 }
