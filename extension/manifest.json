@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "grabnr",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Hand browser downloads to the grabnr desktop download manager.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA5PtXEzMlkpn/MjvBwVhkpJ7RSoR90zWxjGTnsAzAkzYC8kB/Y5rfQ2Akos5wOSUKC5VZi06iq9L0/pLelKvYkP+kfS1NRd3iGapahMjHdohW/t/7HKIiw5ThqdvZLCylmvcvS+mhEOnDUBugQ4HNUfZHbMcuNCq5uWanmD0YEzdJchN3pA8rclG/lr5pGjD4EhJxwTigQDQsEMt+yKIiVHcRDyBLI/p/Iy3Hsr2UaZf7VaF1vEycmjiYLmY+W5sJo1BzyONReVGQg9738aWI+/vJrEB+d74brekY2ZPrTETMq6AAsnex/g8/O8HbhnURtzVBnQLmSyguifq9B8dIuwIDAQAB",
   "permissions": [
