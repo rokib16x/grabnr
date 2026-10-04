@@ -27,11 +27,22 @@ impl BindMode {
     }
 }
 
+/// One-shot client (no connection reuse): used by probes and the spike.
 pub fn client_for(link: Option<&Link>, mode: BindMode) -> Result<reqwest::Client, reqwest::Error> {
+    build(link, mode, false)
+}
+
+/// Download client: keeps connections open from one chunk to the next.
+/// HTTP/1.1 only, because HTTP/2 would multiplex every worker onto one TCP connection.
+pub fn client_pooled(link: Option<&Link>, mode: BindMode) -> Result<reqwest::Client, reqwest::Error> {
+    build(link, mode, true)
+}
+
+fn build(link: Option<&Link>, mode: BindMode, pooled: bool) -> Result<reqwest::Client, reqwest::Error> {
     let mut b = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(8))
-        .pool_max_idle_per_host(0)
         .user_agent(concat!("grabnr/", env!("CARGO_PKG_VERSION")));
+    b = if pooled { b.http1_only().pool_idle_timeout(Duration::from_secs(30)) } else { b.pool_max_idle_per_host(0) };
     if let Some(link) = link {
         match mode {
             BindMode::None => {}

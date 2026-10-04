@@ -1,5 +1,10 @@
 use clap::{Parser, Subcommand};
-use grabnr_core::{interfaces::shared_gateways, list_links, spike};
+use std::io::Write;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use grabnr_core::{interfaces::shared_gateways, list_links, spike, Error, Event, Options, Route, Store};
+use tokio_util::sync::CancellationToken;
 
 #[derive(Parser)]
 #[command(name = "grabnr", about = "Combine every network connection into one fast download")]
@@ -12,6 +17,22 @@ struct Cli {
 enum Cmd {
     /// List usable network links
     Links,
+    /// Download a URL over every active link (Ctrl-C pauses; run again to resume)
+    Get {
+        url: String,
+        /// Output folder
+        #[arg(short, long, default_value = ".")]
+        out: PathBuf,
+        /// Interfaces to use (default: all usable links), e.g. en0,en5
+        #[arg(long, value_delimiter = ',')]
+        only: Vec<String>,
+        /// Connections per link
+        #[arg(long, default_value_t = 8)]
+        conns: usize,
+        /// Extra request header, "Name: value" (repeatable)
+        #[arg(short = 'H', long = "header")]
+        headers: Vec<String>,
+    },
     /// Check that interface binding works and that links add up
     Spike {
         /// Interfaces to use (default: all usable links), e.g. en0,en5
@@ -48,6 +69,65 @@ async fn main() {
                 println!("warning: {a} and {b} share a gateway and will not add bandwidth");
             }
         }
+        Cmd::Get { url, out, only, conns, headers } => {
+            let mut links = list_links();
+            if !only.is_empty() {
+                links.retain(|l| only.contains(&l.name));
+            }
+            if links.is_empty() {
+                eprintln!("no usable links found");
+                std::process::exit(1);
+            }
+            let routes: Vec<Route> = links.iter().map(Route::from_link).collect();
+            eprintln!("using: {}", links.iter().map(|l| format!("{} ({})", l.name, l.label)).collect::<Vec<_>>().join(", "));
+
+            let db = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into())).join(".grabnr");
+            std::fs::create_dir_all(&db).ok();
+            let mut opts = Options::new(url, out, routes);
+            opts.conns_per_route = conns;
+            opts.store = Some(Arc::new(Store::open(&db.join("state.db")).expect("open state db")));
+            opts.headers = headers
+                .iter()
+                .filter_map(|h| h.split_once(':').map(|(k, v)| (k.trim().to_string(), v.trim().to_string())))
+                .collect();
+
+            let cancel = CancellationToken::new();
+            let c = cancel.clone();
+            tokio::spawn(async move {
+                let _ = tokio::signal::ctrl_c().await;
+                eprintln!("\npausing...");
+                c.cancel();
+            });
+            let emit: Arc<dyn Fn(Event) + Send + Sync> = Arc::new(|e| match e {
+                Event::Started { filename, total, chunks, ranges, resumed_chunks } => eprintln!(
+                    "{filename}: {} in {chunks} chunk(s){}{}",
+                    total.map(human).unwrap_or_else(|| "unknown size".into()),
+                    if ranges { "" } else { " (server has no range support: single stream)" },
+                    if resumed_chunks > 0 { format!(", resuming with {resumed_chunks} done") } else { String::new() }
+                ),
+                Event::ResumeDiscarded { reason } => eprintln!("starting over: {reason}"),
+                Event::RouteDown { route, reason } => eprintln!("\nlink #{route} dropped out: {reason}"),
+                Event::Progress(s) => {
+                    let pct = s.total.filter(|t| *t > 0).map(|t| format!("{:>3}%", s.downloaded * 100 / t)).unwrap_or_default();
+                    let per: Vec<String> = s.routes.iter().map(|r| format!("{} {}/s", r.name, human(r.bytes_per_sec as u64))).collect();
+                    eprint!("\r{pct} {} at {}/s  [{}]   ", human(s.downloaded), human(s.bytes_per_sec as u64), per.join("  "));
+                    let _ = std::io::stderr().flush();
+                }
+                Event::Finished { path } => eprintln!("\nsaved {path}"),
+                Event::ChunkDone { .. } => {}
+            });
+            match grabnr_core::download(opts, cancel, emit).await {
+                Ok(_) => {}
+                Err(Error::Cancelled) => {
+                    eprintln!("paused; run the same command to resume");
+                    std::process::exit(130);
+                }
+                Err(e) => {
+                    eprintln!("\nerror: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
         Cmd::Spike { only, secs, url, json } => {
             let mut links = list_links();
             if !only.is_empty() {
@@ -80,4 +160,14 @@ async fn main() {
             println!("\ncombined: {:.1} Mbps  (best single link: {:.1} Mbps)", report.combined_mbps, report.best_solo_mbps);
         }
     }
+}
+
+fn human(b: u64) -> String {
+    const U: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let (mut v, mut i) = (b as f64, 0);
+    while v >= 1024.0 && i < U.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    format!("{v:.1} {}", U[i])
 }

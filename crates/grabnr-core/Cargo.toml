@@ -7,8 +7,13 @@ license = "MIT"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "io-util"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream"] }
 futures-util = "0.3"
 netdev = "0.46"
 thiserror = "2"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+tokio-util = "0.7.19"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
