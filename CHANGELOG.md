@@ -4,6 +4,10 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-04
+
+First signed release: the macOS apps are signed with a Developer ID certificate and notarized by Apple, and installed apps can check for and install updates. Everything below was added since 0.1.0.
+
 ### Added
 - **Updates:** Preferences has Check for updates, which installs a signed update and restarts (active in release builds that carry the update key). The main window is built only when opened, so the app idles at about 33 MB of its own memory.
 - **Releases:** the Release workflow can be run by hand as a dry run, and docs/RELEASING.md lists the secrets and steps.
