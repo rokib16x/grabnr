@@ -20,6 +20,7 @@ async function refreshBadge(unreachable) {
 }
 
 function quietNotify(message) {
+  if (!chrome.notifications) return;
   const now = Date.now();
   if (now - lastNotify < NOTIFY_INTERVAL_MS) return;
   lastNotify = now;
@@ -80,7 +81,8 @@ function createMenu() {
   });
 }
 
-chrome.downloads.onCreated.addListener((item) => { handleDownload(item); });
+// Safari has no downloads API: there the extension works from the context menu and popup only.
+if (chrome.downloads && chrome.downloads.onCreated) chrome.downloads.onCreated.addListener((item) => { handleDownload(item); });
 chrome.contextMenus.onClicked.addListener((info) => { handleMenu(info); });
 chrome.runtime.onInstalled.addListener(() => { createMenu(); refreshBadge(false); });
 chrome.runtime.onStartup.addListener(() => refreshBadge(false));

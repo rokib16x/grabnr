@@ -28,4 +28,12 @@ for (const d of [made.chrome.dir, made.firefox.dir]) {
   }
 }
 assert.ok(existsSync(made.chrome.zip) && existsSync(made.firefox.zip));
+
+const sf = read(made.safari.dir);
+assert.ok(!sf.permissions.includes('downloads') && !sf.permissions.includes('notifications'), 'Safari has neither API');
+assert.deepEqual(sf.background, { scripts: ['background.js'] });
+const bg = readFileSync(join(made.safari.dir, 'background.js'), 'utf8');
+assert.ok(!/^\s*(import|export)\b/m.test(bg), 'the Safari background must not use module syntax');
+assert.ok(bg.includes('async function addDownload') && bg.includes('function createMenu'), 'lib.js and background.js are both in it');
+new Function(bg); // it must at least parse as a plain script
 console.log('build: all assertions passed');

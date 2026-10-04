@@ -27,6 +27,23 @@ export function firefoxManifest(m) {
   return f;
 }
 
+/** Safari has no downloads or notifications API and wants a plain (non-module) background script. */
+export function safariManifest(m) {
+  const s = structuredClone(m);
+  delete s.key;
+  s.permissions = s.permissions.filter((p) => p !== 'downloads' && p !== 'notifications');
+  s.background = { scripts: [m.background.service_worker] };
+  delete s.options_ui.open_in_tab;
+  delete s.browser_specific_settings;
+  return s;
+}
+
+/** One file for the Safari background: lib.js first, then background.js, with the module syntax removed. */
+export function safariBackground(lib, background) {
+  const strip = (src) => src.replace(/^import .*$/gm, '').replace(/^export (async function|function|const|let)/gm, '$1');
+  return `${strip(lib)}\n${strip(background)}\n`;
+}
+
 export function build(outDir = join(root, 'dist')) {
   const manifest = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8'));
   rmSync(outDir, { recursive: true, force: true });
@@ -40,6 +57,13 @@ export function build(outDir = join(root, 'dist')) {
     execFileSync('zip', ['-qr', zip, '.', '-x', '*.DS_Store'], { cwd: dir });
     made[name] = { dir, zip };
   }
+  // Safari: the same extension without capture, ready for `xcrun safari-web-extension-converter` (see tools/safari.sh).
+  const sdir = join(outDir, 'safari');
+  mkdirSync(sdir, { recursive: true });
+  for (const f of FILES) cpSync(join(root, f), join(sdir, f), { recursive: true });
+  writeFileSync(join(sdir, 'manifest.json'), JSON.stringify(safariManifest(manifest), null, 2) + '\n');
+  writeFileSync(join(sdir, 'background.js'), safariBackground(readFileSync(join(root, 'lib.js'), 'utf8'), readFileSync(join(root, 'background.js'), 'utf8')));
+  made.safari = { dir: sdir };
   return made;
 }
 
