@@ -385,12 +385,44 @@ fn quit_app(app: tauri::AppHandle) {
 
 /// From the menu bar popover: bring the main window forward, optionally on the settings sheet.
 #[tauri::command]
-fn show_main_window(app: tauri::AppHandle, settings: bool) {
+fn show_main_window(app: tauri::AppHandle, m: Mgr, settings: bool) {
     hide_popover(&app);
-    show_main(&app);
+    // The window may have to be created first and not be listening yet, so the request is also kept for it to pick up.
     if settings {
+        m.request_settings();
+    }
+    let existed = app.get_webview_window("main").is_some();
+    show_main(&app);
+    if settings && existed {
         let _ = app.emit_to("main", "open-settings", ());
     }
+}
+
+/// True once, if the menu bar popover asked for Preferences while the main window was being created.
+#[tauri::command]
+fn take_open_settings(m: Mgr) -> bool {
+    m.take_settings_request()
+}
+
+/// Updates exist only in release builds that carry the updater key (see docs/RELEASING.md); elsewhere this says so.
+#[tauri::command]
+async fn check_update(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    if !app.config().plugins.0.contains_key("updater") {
+        return Err("Updates are not available in this build.".into());
+    }
+    let update = app.updater().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())?;
+    Ok(update.map(|u| u.version))
+}
+
+/// Downloads and installs the pending update, then restarts.
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let update = app.updater().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())?;
+    let Some(update) = update else { return Ok(()) };
+    update.download_and_install(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
+    app.restart()
 }
 
 fn hide_popover(app: &tauri::AppHandle) {
@@ -423,8 +455,18 @@ fn toggle_popover(app: &tauri::AppHandle, icon: tauri::Rect) {
     let _ = w.set_focus();
 }
 
-fn show_main(app: &tauri::AppHandle) {
+/// The main window, created from its configuration if it is not open. A closed window costs no memory: the
+/// web view is only built while someone is looking at it.
+fn ensure_main(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
     if let Some(w) = app.get_webview_window("main") {
+        return Some(w);
+    }
+    let cfg = app.config().app.windows.iter().find(|w| w.label == "main")?.clone();
+    tauri::WebviewWindowBuilder::from_config(app, &cfg).ok()?.build().ok()
+}
+
+fn show_main(app: &tauri::AppHandle) {
+    if let Some(w) = ensure_main(app) {
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
@@ -502,7 +544,8 @@ fn build_tray(app: &tauri::AppHandle, m: Arc<Manager>) -> tauri::Result<()> {
 /// Dock icon: a progress bar and the number of running downloads.
 fn dock_progress(app: &tauri::AppHandle, running: usize, pct: Option<u64>) {
     use tauri::window::{ProgressBarState, ProgressBarStatus};
-    let Some(w) = app.get_webview_window("main") else { return };
+    // The tray window always exists (hidden), unlike the main window, which is only open while it is shown.
+    let Some(w) = app.get_webview_window("tray") else { return };
     let state = match (running, pct) {
         (0, _) => ProgressBarState { status: Some(ProgressBarStatus::None), progress: None },
         (_, Some(p)) => ProgressBarState { status: Some(ProgressBarStatus::Normal), progress: Some(p.min(100)) },
@@ -560,18 +603,20 @@ pub fn run() {
                 }
             }
             app.manage(m);
+            if app.config().plugins.0.contains_key("updater") {
+                app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+            }
             // Started by the login item: stay in the menu bar until the user opens the window.
-            if std::env::args().any(|a| a == "--hidden") {
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.hide();
-                }
+            if !std::env::args().any(|a| a == "--hidden") {
+                ensure_main(app.handle());
             }
             Ok(())
         })
-        // Closing the window hides it; downloads and the browser-extension API keep running.
+        // Closing the main window really closes it (and frees its memory); downloads and the browser-extension API keep
+        // running because the menu bar popover window always exists, and the next "open" builds the main window again.
         .on_window_event(|window, event| {
             match event {
-                WindowEvent::CloseRequested { api, .. } => {
+                WindowEvent::CloseRequested { api, .. } if window.label() != "main" => {
                     api.prevent_close();
                     let _ = window.hide();
                 }
@@ -612,6 +657,9 @@ pub fn run() {
             resume_all,
             quit_app,
             show_main_window,
+            take_open_settings,
+            check_update,
+            install_update,
             get_autostart,
             set_autostart,
             run_spike
@@ -625,6 +673,6 @@ pub fn run() {
                 show_main(app);
             }
             #[cfg(not(target_os = "macos"))]
-            let _ = (app, event);
+            let _ = app;
         });
 }

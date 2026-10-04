@@ -1,6 +1,11 @@
 // German translations. The keys are the English texts in the UI; a missing key falls back to English.
 // Written without a native review: corrections are welcome.
 const dict: Record<string, string> = {
+  "Updates": "Updates",
+  "Install grabnr {v} and restart": "grabnr {v} installieren und neu starten",
+  "Checking…": "Prüfe …",
+  "Check for updates": "Nach Updates suchen",
+  "grabnr is up to date.": "grabnr ist auf dem neuesten Stand.",
   "\"bound\" means the traffic really left through that link. \"same egress\" means the same public address as normal routing, which is expected when links share an ISP.": "„bound“ heißt, der Datenverkehr ist wirklich über diese Verbindung hinausgegangen. „same egress“ heißt, dieselbe öffentliche Adresse wie beim normalen Routing – das ist normal, wenn Verbindungen denselben Anbieter haben.",
   "A link": "Eine Verbindung",
   "Add 1 Download": "1 Download hinzufügen",

@@ -1,6 +1,11 @@
 // Bengali translations. The keys are the English texts in the UI; a missing key falls back to English.
 // Written without a native review: corrections are welcome.
 const dict: Record<string, string> = {
+  "Updates": "আপডেট",
+  "Install grabnr {v} and restart": "grabnr {v} ইনস্টল করে রিস্টার্ট করুন",
+  "Checking…": "পরীক্ষা করা হচ্ছে…",
+  "Check for updates": "আপডেট খুঁজুন",
+  "grabnr is up to date.": "grabnr হালনাগাদ আছে।",
   "\"bound\" means the traffic really left through that link. \"same egress\" means the same public address as normal routing, which is expected when links share an ISP.": "\"bound\" মানে ট্রাফিক সত্যিই ওই সংযোগ দিয়ে বেরিয়েছে। \"same egress\" মানে সাধারণ রাউটিংয়ের মতোই একই পাবলিক ঠিকানা, যা একই ISP-র সংযোগে স্বাভাবিক।",
   "A link": "একটি সংযোগ",
   "Add 1 Download": "১টি ডাউনলোড যোগ করুন",

@@ -5,6 +5,8 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added
+- **Updates:** Preferences has Check for updates, which installs a signed update and restarts (active in release builds that carry the update key). The main window is built only when opened, so the app idles at about 33 MB of its own memory.
+- **Releases:** the Release workflow can be run by hand as a dry run, and docs/RELEASING.md lists the secrets and steps.
 - **Engine:** speed limits (overall and per link), checksum verification (SHA-256, SHA-1, MD5), disk-space check, adaptive connections per link, slow-link protection at the end of a download.
 - **Reliability:** links that join or leave a running download, restart on a changed IP, stalled-connection recovery, revival of failed links, automatic retries with growing delays.
 - **Platforms:** Linux and Windows builds in CI and the release workflow, per-platform window settings, one running copy at a time, sleep and shell actions for each system, popover placement for a taskbar at the bottom of the screen.

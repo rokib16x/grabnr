@@ -263,6 +263,8 @@ pub struct Manager {
     history: Mutex<Vec<HistoryRec>>,
     /// One speed limit shared by every download; the schedule and settings change it while they run.
     webhook_error: Mutex<Option<String>>,
+    /// The popover asked for Preferences; the main window takes it when it opens.
+    open_settings: std::sync::atomic::AtomicBool,
     secrets: Arc<crate::secrets::Cached>,
     keychain_error: Mutex<Option<String>>,
     limiter: Arc<Limiter>,
@@ -358,6 +360,7 @@ impl Manager {
             pairing_until: Mutex::new(None),
             history: Mutex::new(history),
             webhook_error: Mutex::new(None),
+            open_settings: std::sync::atomic::AtomicBool::new(false),
             secrets,
             keychain_error: Mutex::new(None),
             limiter: Arc::new(Limiter::new(0)),
@@ -918,6 +921,14 @@ impl Manager {
             let res = grabnr_core::fetch::post_json(&url, body, proxy.as_deref(), Duration::from_secs(10)).await;
             *me.webhook_error.lock().unwrap() = res.err().map(|e| e.to_string());
         });
+    }
+
+    pub fn request_settings(&self) {
+        self.open_settings.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn take_settings_request(&self) -> bool {
+        self.open_settings.swap(false, std::sync::atomic::Ordering::SeqCst)
     }
 
     pub fn queue_links(&self) -> String {

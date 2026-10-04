@@ -76,7 +76,7 @@ Anything marked built has not yet been proven on two real links with different g
 - [~] `grabnr://add?url=` links (works in the packaged app; not testable in dev). A "Download with grabnr" Services menu item for selected text and links (`integrations/macos`, tested headlessly). No Share Sheet extension
 - [x] Quarantine attribute on finished files (setting, on by default)
 - [~] Release workflow builds the app; signing and notarization need an Apple Developer account
-- [ ] Auto-update
+- [~] Auto-update: check and install in Preferences with a signed update key; active once the key is a repository secret and a release exists
 
 ## 7. Automation and developer features
 - [x] CLI on the same engine (`links`, `get`, `spike`)

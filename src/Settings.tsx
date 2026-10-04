@@ -12,6 +12,17 @@ export function SettingsPanel({ settings, apiPort, apiOk, keychainAvailable, onC
   const [showToken, setShowToken] = useState(false);
   const [report, setReport] = useState<SpikeReport | null>(null);
   const [testing, setTesting] = useState(false);
+  const [update, setUpdate] = useState<{ state: "idle" | "checking" | "none" } | { state: "found"; version: string } | { state: "error"; message: string }>({ state: "idle" });
+  const checkUpdate = async () => {
+    setUpdate({ state: "checking" });
+    try {
+      const v = await api.checkUpdate();
+      setUpdate(v ? { state: "found", version: v } : { state: "none" });
+    } catch (e) {
+      setUpdate({ state: "error", message: String(e) });
+    }
+  };
+  const installUpdate = () => api.installUpdate().catch((e) => setUpdate({ state: "error", message: String(e) }));
   const [testErr, setTestErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [diag, setDiag] = useState<string | null>(null);
@@ -226,6 +237,17 @@ export function SettingsPanel({ settings, apiPort, apiOk, keychainAvailable, onC
               <p className="muted">{t("\"bound\" means the traffic really left through that link. \"same egress\" means the same public address as normal routing, which is expected when links share an ISP.")}</p>
             </div>
           )}
+        </section>
+
+        <section>
+          <h3>{t("Updates")}</h3>
+          {update.state === "found" ? (
+            <button className="primary" onClick={installUpdate}>{t("Install grabnr {v} and restart", { v: update.version })}</button>
+          ) : (
+            <button onClick={checkUpdate} disabled={update.state === "checking"}>{update.state === "checking" ? t("Checking…") : t("Check for updates")}</button>
+          )}
+          {update.state === "none" && <p className="muted">{t("grabnr is up to date.")}</p>}
+          {update.state === "error" && <p className="err">{update.message}</p>}
         </section>
 
         <section>

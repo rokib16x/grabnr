@@ -143,6 +143,9 @@ export const mock = {
       case "allow_pairing": return 60;
       case "pause_all": items.filter((i) => i.status === "downloading").forEach((i) => { clearInterval(timers.get(i.id)); i.status = "paused"; handlers?.item({ ...i }); }); return;
       case "resume_all": items.filter((i) => i.status === "paused").forEach(run); return;
+      case "take_open_settings": return false;
+      case "check_update": throw "Updates are not available in this build.";
+      case "install_update": return;
       case "quit_app": case "show_main_window": return;
       case "run_spike": throw "Link test is only available in the desktop app";
       default: return;

@@ -75,6 +75,8 @@ export function MainWindow() {
   const [overId, setOverId] = useState<string | null>(null);
 
   useEffect(() => onOpenSettings(() => setSettingsOpen(true)), []);
+  // Preferences were requested (from the menu bar) while this window was still being created.
+  useEffect(() => void api.takeOpenSettings().then((v) => v && setSettingsOpen(true)).catch(() => {}), []);
   useEffect(() => { try { localStorage.setItem("grabnr.sort", sort); } catch { /* storage may be unavailable */ } }, [sort]);
   useEffect(() => {
     if (!toast) return;

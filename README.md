@@ -4,6 +4,8 @@ Download faster by using every network connection at once: Wi-Fi, Ethernet, USB 
 Files are split into chunks, and a worker bound to each interface pulls chunks from a shared queue,
 so faster links take more chunks.
 
+**Website and downloads: https://rokib16x.github.io/grabnr/** (source in `site/`).
+
 Built with Tauri 2 and Rust (small installer, low memory). Developed on macOS; Linux and Windows builds are produced too (see Platforms).
 
 ## Layout
@@ -27,6 +29,11 @@ Built and tested (see [FEATURES.md](FEATURES.md) for the full list):
 Not done yet: FTP/SFTP, torrents, HLS, the scheduler, Safari and Firefox extensions, signed builds and auto-update, Windows and Linux apps.
 
 **Not yet proven on real hardware:** that traffic splits across two links with different gateways. The engine is tested against a local range server and the interface binding is checked by `grabnr spike`, but nobody has yet measured the speed-up on two physical connections.
+
+## Opening an unsigned build
+
+Until releases are signed with an Apple Developer ID, macOS refuses to open the app the first time. Control-click it, choose
+**Open**, then **Open** again (details in [docs/RELEASING.md](docs/RELEASING.md)).
 
 ## Platforms
 

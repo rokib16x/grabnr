@@ -21,7 +21,8 @@
           ],
           "state": "followsWindowActiveState"
         },
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "create": false
       },
       {
         "label": "tray",

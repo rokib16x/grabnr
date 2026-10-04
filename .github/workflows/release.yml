@@ -1,6 +1,7 @@
 name: Release
 
 # Push a tag like v0.2.0 to build the apps and attach them to a draft GitHub release.
+# Run it by hand (without a tag) for a dry run: everything is built and kept as workflow artifacts, nothing is released.
 on:
   push:
     tags: ["v*"]
@@ -39,6 +40,10 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Optional: signs the update packages so installed apps can update themselves (see docs/RELEASING.md).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
           # Optional: set these repository secrets to sign and notarize the macOS app.
           # Without them the build is unsigned and macOS Gatekeeper will warn on first launch.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -48,12 +53,14 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
-          tagName: ${{ github.ref_name }}
+          # No tag (a dry run): build only, and keep the results as workflow artifacts.
+          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
           releaseName: grabnr ${{ github.ref_name }}
           releaseBody: See CHANGELOG.md for what changed.
           releaseDraft: true
           prerelease: false
-          args: ${{ matrix.args }}
+          uploadWorkflowArtifacts: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          args: ${{ matrix.args }} ${{ env.HAS_UPDATER_KEY == 'true' && '--config src-tauri/tauri.updater.conf.json' || '' }}
 
   cli:
     name: CLI (${{ matrix.os }})
@@ -84,6 +91,12 @@ jobs:
           mkdir dist-cli && cp "target/release/${{ matrix.bin }}" dist-cli/
           cd dist-cli
           if [[ "${{ matrix.asset }}" == *.zip ]]; then 7z a "../${{ matrix.asset }}" "${{ matrix.bin }}"; else tar czf "../${{ matrix.asset }}" "${{ matrix.bin }}"; fi
+      - name: Keep as an artifact (dry run)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
       - name: Attach to the release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
@@ -99,6 +112,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: node extension/tools/build.mjs
+      - name: Keep as artifacts (dry run)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: extensions
+          path: |
+            extension/dist/grabnr-chrome.zip
+            extension/dist/grabnr-firefox.zip
       - name: Attach to the release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
