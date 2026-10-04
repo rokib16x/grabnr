@@ -1,0 +1,36 @@
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
+import { mock } from "./mock";
+import type { AppState, EngineEvent, Item, LinksResponse, Settings, SpikeReport } from "./types";
+
+const native = "__TAURI_INTERNALS__" in window;
+const call = <T,>(cmd: string, args?: Record<string, unknown>) => (native ? invoke<T>(cmd, args) : (mock.call(cmd, args) as Promise<T>));
+
+export const api = {
+  state: () => call<AppState>("get_state"),
+  links: () => call<LinksResponse>("get_links"),
+  add: (url: string, filename?: string) => call<string>("add_download", { url, filename: filename || null }),
+  pause: (id: string) => call<void>("pause_download", { id }),
+  resume: (id: string) => call<void>("resume_download", { id }),
+  remove: (id: string, deleteFiles: boolean) => call<void>("remove_download", { id, deleteFiles }),
+  reveal: (id: string) => call<void>("reveal_download", { id }),
+  open: (id: string) => call<void>("open_download", { id }),
+  setSettings: (patch: Partial<Settings>) => call<Settings>("set_settings", { patch }),
+  allowPairing: () => call<number>("allow_pairing"),
+  spike: (only: string[], secs: number) => call<SpikeReport>("run_spike", { only, secs }),
+  pickFolder: async () => (native ? ((await open({ directory: true })) as string | null) : "/Users/you/Documents"),
+};
+
+type Handlers = { item: (i: Item) => void; removed: (id: string) => void; event: (id: string, e: EngineEvent) => void };
+
+/** Subscribe to backend events; returns an unsubscribe function. */
+export function subscribe(h: Handlers): () => void {
+  if (!native) return mock.subscribe(h);
+  const subs = [
+    listen<Item>("item-updated", (e) => h.item(e.payload)),
+    listen<string>("item-removed", (e) => h.removed(e.payload)),
+    listen<{ id: string; event: EngineEvent }>("download-event", (e) => h.event(e.payload.id, e.payload.event)),
+  ];
+  return () => subs.forEach((p) => p.then((un) => un()));
+}

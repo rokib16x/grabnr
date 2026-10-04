@@ -12,8 +12,9 @@ Built with Tauri 2 and Rust (small installer, low memory). macOS first, then Win
 |---|---|
 | `crates/grabnr-core` | Engine: interface discovery, binding (`IP_BOUND_IF`), transfers |
 | `crates/grabnr-cli` | `grabnr` CLI built on the same engine |
-| `src-tauri` | Tauri app shell |
-| `src` | React + TypeScript UI |
+| `src-tauri` | Tauri app: download manager, queue, local API for the browser extension |
+| `src` | React + TypeScript UI (download list, chunk grid, per-link speed graph, settings) |
+| `extension` | Chrome/Brave/Edge extension that hands browser downloads to the app |
 | `FEATURES.md` | Full feature list |
 
 ## Status
@@ -26,14 +27,24 @@ Working now (`grabnr-core`, tested):
 - Pause/resume across restarts (SQLite); a changed file discards the partial download instead of mixing versions
 - Single-stream fallback for servers without range support
 
-Not done yet: the Tauri download list UI, adaptive connection growth, checksums, FTP/SFTP/torrents, the rest of `FEATURES.md`.
+Also working: the desktop app (queue, pause/resume, notifications, per-link share bar, chunk grid, speed graph, settings) and the browser-extension capture API.
+
+Not done yet: Firefox/Safari extensions, tray icon and launch at login, adaptive connection growth, checksums, FTP/SFTP/torrents, the rest of `FEATURES.md`.
 
 Still to prove on real hardware: that traffic splits across two links with different gateways.
 
 ```bash
 cargo run -p grabnr-cli -- get https://proof.ovh.net/files/100Mb.dat -o ~/Downloads
 cargo test -p grabnr-core
+npm install && npm run tauri dev
+node extension/test/harness.mjs
 ```
+
+## Browser extension
+
+Load `extension/` unpacked (see `extension/README.md`), click **Allow pairing** in grabnr's Settings, then **Pair** in the extension options.
+Downloads started in the browser are sent to grabnr and the browser copy is cancelled. If grabnr is not running, the browser downloads normally.
+The app listens on `127.0.0.1:17653` only, refuses requests from web pages, and requires a token for `/add`.
 
 ```bash
 cargo run -p grabnr-cli -- links

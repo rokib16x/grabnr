@@ -1,111 +1,143 @@
-import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useMemo, useReducer, useState } from "react";
+import { api, subscribe } from "./api";
+import { AddDialog } from "./AddDialog";
+import { bytes, rate } from "./format";
+import { DownloadRow } from "./DownloadRow";
+import { SettingsPanel } from "./Settings";
+import type { AppState, EngineEvent, Item, Live, Settings } from "./types";
 import "./App.css";
 
-type Link = {
-  name: string;
-  label: string;
-  kind: string;
-  ipv4: string;
-  gateway: string | null;
-  is_default_route: boolean;
-};
-type ModeResult = { mode: string; public_ip: string | null; verdict: string; error: string | null };
-type Throughput = { link: string; mbps: number; error: string | null };
-type Report = {
-  baseline_ip: string | null;
-  links: { link: string; modes: ModeResult[]; solo: Throughput }[];
-  combined_mbps: number;
-  best_solo_mbps: number;
-};
+type State = { items: Item[]; live: Record<string, Live> };
+type Action =
+  | { t: "init"; items: Item[] }
+  | { t: "item"; item: Item }
+  | { t: "removed"; id: string }
+  | { t: "event"; id: string; e: EngineEvent };
+
+const HISTORY = 60;
+
+function reduce(s: State, a: Action): State {
+  switch (a.t) {
+    case "init":
+      return { ...s, items: a.items };
+    case "item": {
+      const i = s.items.findIndex((x) => x.id === a.item.id);
+      const items = i < 0 ? [a.item, ...s.items] : s.items.map((x) => (x.id === a.item.id ? a.item : x));
+      return { ...s, items };
+    }
+    case "removed": {
+      const { [a.id]: _gone, ...live } = s.live;
+      return { items: s.items.filter((x) => x.id !== a.id), live };
+    }
+    case "event": {
+      const cur = s.live[a.id];
+      const e = a.e;
+      let next: Live | undefined = cur;
+      if (e.type === "started") {
+        next = { downloaded: 0, v: 0, routes: [], speed: 0, chunks: new Uint8Array(e.chunks), resumedChunks: e.resumed_chunks, history: [], notice: e.ranges ? null : "This server does not support ranges, so it downloads as a single stream." };
+      } else if (cur && e.type === "progress") {
+        const history = e.routes.map((r, i) => [...(cur.history[i] ?? []), r.bytes_per_sec].slice(-HISTORY));
+        next = { ...cur, downloaded: e.downloaded, speed: e.bytes_per_sec, routes: e.routes, history };
+      } else if (cur && e.type === "chunk_done") {
+        cur.chunks[e.idx] = e.route + 1; // in place: a copy per chunk would be wasteful on huge files
+        next = { ...cur, v: cur.v + 1 };
+      } else if (cur && e.type === "route_down") {
+        next = { ...cur, notice: `${cur.routes[e.route]?.name ?? "A link"} dropped out (${e.reason}); the other links are taking over.` };
+      } else if (cur && e.type === "resume_discarded") {
+        next = { ...cur, notice: `Started over: ${e.reason}.` };
+      }
+      return next ? { ...s, live: { ...s.live, [a.id]: next } } : s;
+    }
+  }
+}
 
 export default function App() {
-  const [links, setLinks] = useState<Link[]>([]);
-  const [shared, setShared] = useState<[string, string][]>([]);
-  const [picked, setPicked] = useState<Set<string>>(new Set());
-  const [report, setReport] = useState<Report | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [state, dispatch] = useReducer(reduce, { items: [], live: {} });
+  const [app, setApp] = useState<AppState | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [filter, setFilter] = useState<"all" | "active" | "done">("all");
 
   useEffect(() => {
-    invoke<{ links: Link[]; shared_gateways: [string, string][] }>("get_links").then((r) => {
-      setLinks(r.links);
-      setShared(r.shared_gateways);
-      setPicked(new Set(r.links.map((l) => l.name)));
+    api.state().then((s) => {
+      setApp(s);
+      dispatch({ t: "init", items: s.downloads });
+    });
+    return subscribe({
+      item: (item) => dispatch({ t: "item", item }),
+      removed: (id) => dispatch({ t: "removed", id }),
+      event: (id, e) => dispatch({ t: "event", id, e }),
     });
   }, []);
 
-  async function runSpike() {
-    setBusy(true);
-    setError(null);
-    setReport(null);
-    try {
-      setReport(await invoke<Report>("run_spike", { only: [...picked], secs: 6 }));
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
+  // Paste a link anywhere in the window to add it.
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      if ((e.target as HTMLElement)?.tagName === "INPUT") return;
+      const t = e.clipboardData?.getData("text")?.trim() ?? "";
+      if (/^https?:\/\/\S+$/i.test(t)) api.add(t).catch(() => {});
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, []);
+
+  const shown = useMemo(
+    () => state.items.filter((i) => (filter === "all" ? true : filter === "done" ? i.status === "done" : i.status !== "done")),
+    [state.items, filter],
+  );
+  const total = state.items.filter((i) => i.status === "downloading").reduce((a, i) => a + (state.live[i.id]?.speed ?? 0), 0);
+  const activeCount = state.items.filter((i) => i.status === "downloading").length;
+  const linkSpeeds = new Map<string, number>();
+  state.items.forEach((i) => i.status === "downloading" && state.live[i.id]?.routes.forEach((r) => linkSpeeds.set(r.name, (linkSpeeds.get(r.name) ?? 0) + r.bytes_per_sec)));
 
   return (
-    <main>
-      <h1>grabnr</h1>
-      <p className="sub">Interface binding spike</p>
-
-      <h2>Links</h2>
-      {links.length === 0 && <p>No active links found.</p>}
-      <ul className="links">
-        {links.map((l) => (
-          <li key={l.name}>
-            <label>
-              <input
-                type="checkbox"
-                checked={picked.has(l.name)}
-                onChange={() => {
-                  const n = new Set(picked);
-                  n.has(l.name) ? n.delete(l.name) : n.add(l.name);
-                  setPicked(n);
-                }}
-              />
-              <b>{l.name}</b> {l.label} · {l.kind} · {l.ipv4}
-              {l.is_default_route && <span className="tag">default route</span>}
-            </label>
-          </li>
-        ))}
-      </ul>
-      {shared.map(([a, b]) => (
-        <p className="warn" key={a + b}>
-          {a} and {b} share a gateway and will not add bandwidth.
-        </p>
-      ))}
-
-      <button onClick={runSpike} disabled={busy || picked.size === 0}>
-        {busy ? "Testing…" : "Run spike"}
-      </button>
-      {error && <p className="warn">{error}</p>}
-
-      {report && (
-        <section>
-          <p>Baseline public IP (OS routing): {report.baseline_ip ?? "?"}</p>
-          {report.links.map((r) => (
-            <div key={r.link} className="card">
-              <b>{r.link}</b>
-              {r.modes.map((m) => (
-                <div key={m.mode}>
-                  {m.mode}: {m.public_ip ?? "-"} → <b>{m.verdict}</b>
-                  {m.error && ` (${m.error})`}
-                </div>
-              ))}
-              <div>solo: {r.solo.mbps.toFixed(1)} Mbps {r.solo.error && `(${r.solo.error})`}</div>
-            </div>
+    <div className="app">
+      <header>
+        <h1>grabnr</h1>
+        <nav>
+          {(["all", "active", "done"] as const).map((f) => (
+            <button key={f} className={filter === f ? "tab on" : "tab"} onClick={() => setFilter(f)}>
+              {f === "all" ? "All" : f === "active" ? "Active" : "Completed"}
+            </button>
           ))}
-          <p>
-            Combined <b>{report.combined_mbps.toFixed(1)} Mbps</b> vs best single link{" "}
-            {report.best_solo_mbps.toFixed(1)} Mbps
-          </p>
-        </section>
+        </nav>
+        <div className="spacer" />
+        <button className="primary" onClick={() => setAdding(true)}>Add link</button>
+        <button className="ghost" onClick={() => setSettingsOpen(true)}>Settings</button>
+      </header>
+
+      <main>
+        {shown.length === 0 ? (
+          <div className="empty">
+            <h2>{state.items.length ? "Nothing here" : "No downloads yet"}</h2>
+            <p>Paste a link anywhere in this window, press Add link, or install the browser extension so downloads from Chrome and Brave start here.</p>
+          </div>
+        ) : (
+          <ul className="list">
+            {shown.map((i) => (
+              <DownloadRow key={i.id} item={i} live={state.live[i.id]} />
+            ))}
+          </ul>
+        )}
+      </main>
+
+      <footer>
+        <span>{activeCount ? `${activeCount} downloading · ${rate(total)}` : "Idle"}</span>
+        {[...linkSpeeds].map(([n, v]) => (
+          <span key={n} className="muted">{n} {bytes(v)}/s</span>
+        ))}
+      </footer>
+
+      {adding && <AddDialog onClose={() => setAdding(false)} />}
+      {settingsOpen && app && (
+        <SettingsPanel
+          settings={app.settings}
+          apiPort={app.api_port}
+          apiOk={app.api_ok}
+          onChange={(settings: Settings) => setApp({ ...app, settings })}
+          onClose={() => setSettingsOpen(false)}
+        />
       )}
-    </main>
+    </div>
   );
 }
