@@ -4,6 +4,11 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-08
+
+### Fixed
+- **Downloads:** the progress figure no longer falls behind the real download. Bytes saved mid-chunk were counted twice as they were taken off the running total, so the percentage and size lagged until you paused and resumed.
+
 ## [0.1.2] - 2026-10-04
 
 ### Fixed
