@@ -919,10 +919,12 @@ async fn consume(
     let (mut pos, mut got) = (from, 0u64);
     let mut crc = crc32fast::Hasher::new_with_initial_len(seed_crc, have);
     let mut last_saved = 0u64;
+    // Bytes of this fetch already moved from `inflight` to `settled` by a checkpoint.
+    let mut moved = 0u64;
     // A fetch that stops early keeps what it wrote when it is the only one on the chunk, so the next attempt (or run)
     // continues there. Otherwise its bytes are given up and the chunk is fetched in full by whoever wins.
-    let stop = |got: u64, crc: &crc32fast::Hasher| {
-        ctx.shared.inflight.fetch_sub(got, Ordering::Relaxed);
+    let stop = |got: u64, moved: u64, crc: &crc32fast::Hasher| {
+        ctx.shared.inflight.fetch_sub(got - moved, Ordering::Relaxed);
         if got == 0 {
             return;
         }
@@ -936,14 +938,14 @@ async fn consume(
     };
     while pos <= end {
         let next = tokio::select! {
-            _ = rs.stop.cancelled() => { stop(got, &crc); return Err(FetchErr::Cancelled) }
+            _ = rs.stop.cancelled() => { stop(got, moved, &crc); return Err(FetchErr::Cancelled) }
             n = tokio::time::timeout(ctx.stall_timeout, stream.next()) => match n {
                 Ok(n) => n,
-                Err(_) => { stop(got, &crc); return Err(FetchErr::Retry("the connection stalled".into())) }
+                Err(_) => { stop(got, moved, &crc); return Err(FetchErr::Retry("the connection stalled".into())) }
             },
         };
         if ctx.sched.is_done(idx) {
-            ctx.shared.inflight.fetch_sub(got, Ordering::Relaxed);
+            ctx.shared.inflight.fetch_sub(got - moved, Ordering::Relaxed);
             return Ok(Outcome::Lost);
         }
         match next {
@@ -956,7 +958,7 @@ async fn consume(
                     l.acquire(take as u64).await;
                 }
                 if let Err(e) = ctx.file.write_all_at(&b[..take], pos) {
-                    ctx.shared.inflight.fetch_sub(got, Ordering::Relaxed);
+                    ctx.shared.inflight.fetch_sub(got - moved, Ordering::Relaxed);
                     return Err(FetchErr::Fatal(e.into()));
                 }
                 crc.update(&b[..take]);
@@ -971,6 +973,7 @@ async fn consume(
                     if let Some(delta) = ctx.sched.set_have(idx, have + got, sum) {
                         ctx.shared.settled.fetch_add(delta, Ordering::Relaxed);
                         ctx.shared.inflight.fetch_sub(delta, Ordering::Relaxed);
+                        moved += delta;
                         if let Some(s) = &ctx.store {
                             let _ = s.set_partial(&ctx.id, idx, have + got, sum);
                         }
@@ -978,18 +981,18 @@ async fn consume(
                 }
             }
             Some(Err(e)) => {
-                stop(got, &crc);
+                stop(got, moved, &crc);
                 return Err(FetchErr::Retry(e.to_string()));
             }
             None => {
-                stop(got, &crc);
+                stop(got, moved, &crc);
                 return Err(FetchErr::Retry("connection closed before the chunk finished".into()));
             }
         }
     }
 
     let sum = crc.finalize();
-    ctx.shared.inflight.fetch_sub(got, Ordering::Relaxed);
+    ctx.shared.inflight.fetch_sub(got - moved, Ordering::Relaxed);
     match ctx.sched.complete(idx) {
         Some(delta) => {
             ctx.shared.settled.fetch_add(delta, Ordering::Relaxed);
