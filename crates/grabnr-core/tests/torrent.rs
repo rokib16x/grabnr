@@ -106,65 +106,108 @@ fn silent() -> Arc<dyn Fn(Event) + Send + Sync> {
     Arc::new(|_| {})
 }
 
+/// Seed the same content from two sessions (two peers), each from its own copy, so a download can reach both at once.
+async fn two_seeders(name: &str, content: &str, sub: Option<&str>, write: impl Fn(&Path)) -> (Seed, Seed) {
+    let a = tmp(&format!("{name}-a"));
+    let b = tmp(&format!("{name}-b"));
+    write(&a);
+    write(&b);
+    let sa = seed(&a, content, sub).await;
+    let sb = seed(&b, content, sub).await;
+    assert_eq!(sa.torrent, sb.torrent, "both seeders share one torrent");
+    (sa, sb)
+}
+
+/// Largest bytes seen per link over all progress reports.
+fn link_bytes(seen: &Mutex<HashMap<String, u64>>) -> HashMap<String, u64> {
+    seen.lock().unwrap().clone()
+}
+
+fn track_links(seen: Arc<Mutex<HashMap<String, u64>>>, total_max: Arc<AtomicUsize>) -> Arc<dyn Fn(Event) + Send + Sync> {
+    Arc::new(move |e| {
+        if let Event::Progress(p) = e {
+            assert!(p.downloaded <= p.total.unwrap());
+            total_max.fetch_max(p.routes.len(), Ordering::Relaxed);
+            let mut g = seen.lock().unwrap();
+            for r in p.routes {
+                let v = g.entry(r.name).or_default();
+                *v = (*v).max(r.bytes);
+            }
+        }
+    })
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
-async fn a_multi_file_torrent_is_split_by_file_over_both_links() {
-    let parent = tmp("seed-multi");
-    std::fs::create_dir_all(parent.join("pack")).unwrap();
+async fn a_multi_file_torrent_downloads_over_both_links() {
     let files: HashMap<&str, Vec<u8>> = HashMap::from([
         ("a.bin", data(1_500_000, 1)),
         ("b.bin", data(900_000, 2)),
         ("c.bin", data(700_000, 3)),
         ("d.bin", data(400_000, 4)),
     ]);
-    for (n, d) in &files {
-        std::fs::write(parent.join("pack").join(n), d).unwrap();
-    }
-    let s = seed(&parent, "pack", Some("pack")).await;
-    let url = serve_torrent(s.torrent.clone()).await;
+    let (sa, sb) = two_seeders("seed-multi", "pack", Some("pack"), |parent| {
+        std::fs::create_dir_all(parent.join("pack")).unwrap();
+        for (n, d) in &files {
+            std::fs::write(parent.join("pack").join(n), d).unwrap();
+        }
+    })
+    .await;
+    let url = serve_torrent(sa.torrent.clone()).await;
 
-    let seen = Arc::new(Mutex::new((HashMap::<usize, usize>::new(), 0usize, 0u64)));
-    let sn = seen.clone();
-    let emit: Arc<dyn Fn(Event) + Send + Sync> = Arc::new(move |e| match e {
-        Event::ChunkDone { idx, route } => {
-            sn.lock().unwrap().0.insert(idx, route);
-        }
-        Event::Progress(p) => {
-            let mut g = sn.lock().unwrap();
-            g.1 = g.1.max(p.routes.len());
-            g.2 = g.2.max(p.downloaded);
-            assert!(p.downloaded <= p.total.unwrap());
-        }
-        _ => {}
-    });
+    let seen = Arc::new(Mutex::new(HashMap::new()));
+    let nroutes = Arc::new(AtomicUsize::new(0));
     let dest = tmp("leech-multi");
     let mut o = Options::new(url, &dest, two_routes());
-    o.torrent_peers = vec![s.addr];
-    let path = tokio::time::timeout(std::time::Duration::from_secs(120), download(o, CancellationToken::new(), emit))
-        .await
-        .expect("finishes in time")
-        .unwrap();
+    o.torrent_peers = vec![sa.addr, sb.addr];
+    let path = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        download(o, CancellationToken::new(), track_links(seen.clone(), nroutes.clone())),
+    )
+    .await
+    .expect("finishes in time")
+    .unwrap();
 
     assert_eq!(path, dest.join("pack"));
     for (n, d) in &files {
         assert_eq!(&std::fs::read(path.join(n)).unwrap(), d, "{n} must arrive intact");
     }
-    let g = seen.lock().unwrap();
-    assert_eq!(g.0.len(), 4, "every file is reported as finished: {:?}", g.0);
-    let routes: std::collections::HashSet<usize> = g.0.values().copied().collect();
-    assert_eq!(routes.len(), 2, "both links should have downloaded some files: {:?}", g.0);
-    assert_eq!(g.1, 2, "progress reports both links");
+    assert_eq!(nroutes.load(Ordering::Relaxed), 2, "progress reports both links");
+    let b = link_bytes(&seen);
+    assert!(b.values().all(|&v| v > 0) && b.len() == 2, "both links should have carried data: {b:?}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
-async fn a_single_file_torrent_uses_one_link_and_can_be_cancelled_and_resumed() {
+async fn a_single_file_torrent_is_pulled_over_both_links() {
+    let body = data(8_000_000, 5);
+    let (sa, sb) = two_seeders("seed-one", "movie.bin", None, |parent| std::fs::write(parent.join("movie.bin"), &body).unwrap()).await;
+    let url = serve_torrent(sa.torrent.clone()).await;
+    let seen = Arc::new(Mutex::new(HashMap::new()));
+    let nroutes = Arc::new(AtomicUsize::new(0));
+    let dest = tmp("leech-one");
+    let mut o = Options::new(url, &dest, two_routes());
+    o.torrent_peers = vec![sa.addr, sb.addr];
+    let path = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        download(o, CancellationToken::new(), track_links(seen.clone(), nroutes.clone())),
+    )
+    .await
+    .expect("finishes in time")
+    .unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), body);
+    let b = link_bytes(&seen);
+    assert!(b.values().all(|&v| v > 0) && b.len() == 2, "one file, both links: {b:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn a_single_file_torrent_can_be_cancelled_and_resumed() {
     let parent = tmp("seed-single");
     let body = data(3_000_000, 9);
     std::fs::write(parent.join("movie.bin"), &body).unwrap();
     let s = seed(&parent, "movie.bin", None).await;
     let url = serve_torrent(s.torrent.clone()).await;
     let dest = tmp("leech-single");
-    let mk = || {
-        let mut o = Options::new(url.clone(), &dest, two_routes());
+    let mk = |routes: Vec<Route>| {
+        let mut o = Options::new(url.clone(), &dest, routes);
         o.torrent_peers = vec![s.addr];
         o
     };
@@ -172,25 +215,26 @@ async fn a_single_file_torrent_uses_one_link_and_can_be_cancelled_and_resumed() 
     // Cancel as soon as some data has arrived.
     let cancel = CancellationToken::new();
     let c = cancel.clone();
-    let links = Arc::new(AtomicUsize::new(0));
-    let l = links.clone();
     let emit: Arc<dyn Fn(Event) + Send + Sync> = Arc::new(move |e| {
         if let Event::Progress(p) = e {
-            l.fetch_max(p.routes.len(), Ordering::Relaxed);
             if p.downloaded > 0 {
                 c.cancel();
             }
         }
     });
-    let first = tokio::time::timeout(std::time::Duration::from_secs(120), download(mk(), cancel, emit)).await.expect("stops in time");
+    let first =
+        tokio::time::timeout(std::time::Duration::from_secs(120), download(mk(two_routes()), cancel, emit)).await.expect("stops in time");
     // It may also have finished before the cancel landed; both are fine as long as the second run ends with the right file.
     assert!(matches!(first, Err(Error::Cancelled)) || first.is_ok(), "{first:?}");
-    assert_eq!(links.load(Ordering::Relaxed), 1, "a single file is fetched over a single link");
 
-    let path = tokio::time::timeout(std::time::Duration::from_secs(120), download(mk(), CancellationToken::new(), silent()))
-        .await
-        .expect("finishes in time")
-        .unwrap();
+    // Resume on a single link (no proxy): the session picks up the partial file.
+    let path = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        download(mk(vec![Route::unbound("a")]), CancellationToken::new(), silent()),
+    )
+    .await
+    .expect("finishes in time")
+    .unwrap();
     assert_eq!(path, dest.join("movie.bin"));
     assert_eq!(std::fs::read(path).unwrap(), body);
 }

@@ -180,6 +180,9 @@ export function SettingsPanel({ settings, apiPort, apiOk, keychainAvailable, onC
           <label className="link">
             <input type="checkbox" checked={settings.sound} onChange={(e) => patch({ sound: e.target.checked })} />
              {t("Play a sound when a download finishes")}</label>
+          <label className="link">
+            <input type="checkbox" checked={settings.prevent_sleep} onChange={(e) => patch({ prevent_sleep: e.target.checked })} />
+             {t("Keep the computer awake while downloading")}</label>
           <p className="muted">
             {t("Starts hidden in the {tray} so the browser extension always has somewhere to send downloads. Closing the window keeps grabnr running; quit it from the {tray} icon.", { tray: t(TRAY) })}
           </p>

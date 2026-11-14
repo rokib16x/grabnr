@@ -93,6 +93,9 @@ pub struct Options {
     pub revive_after: Duration,
     /// With no working link at all, wait this long for one to come back before failing.
     pub no_link_grace: Duration,
+    /// With no link present at all (`link_watch` reports none: asleep, Wi-Fi off, cable out), wait this long for one.
+    /// Much longer than `no_link_grace`: the network is simply away, and failing would only burn the automatic retries.
+    pub offline_grace: Duration,
     /// Stable name for the resume state. Without it the link and file name are used, so changing the link starts over;
     /// with it a replaced link (for example a new signed URL) can carry on with the same partial file.
     pub resume_key: Option<String>,
@@ -131,6 +134,7 @@ impl Options {
             stall_timeout: Duration::from_secs(30),
             revive_after: Duration::from_secs(10),
             no_link_grace: Duration::from_secs(30),
+            offline_grace: Duration::from_secs(12 * 3600),
             mirrors: Vec::new(),
             resume_key: None,
             torrent_peers: Vec::new(),
@@ -201,6 +205,14 @@ pub enum Event {
 pub type Emit = Arc<dyn Fn(Event) + Send + Sync>;
 
 const LINK_FAIL_LIMIT: u32 = 5;
+/// With nothing arriving on any link for this long, failing chunks are given up on even though no single one is to blame.
+const OUTAGE_LIMIT: Duration = Duration::from_secs(600);
+/// The same for a download that has not received anything yet: a link that never worked is not worth waiting long for.
+const START_LIMIT: Duration = Duration::from_secs(60);
+/// Data arrived this recently elsewhere: the network is fine and a chunk that keeps failing is itself the problem.
+const BLAME_WINDOW: Duration = Duration::from_secs(5);
+/// A link the server throttled gets one connection back after this long without being throttled again.
+const THROTTLE_LIFT: Duration = Duration::from_secs(60);
 /// How much a fetch writes before it saves its progress inside the chunk.
 const CHECKPOINT: u64 = 1 << 20;
 
@@ -269,6 +281,9 @@ pub(crate) struct Shared {
     pub(crate) settled: AtomicU64,
     /// Bytes written by fetches still in progress, not yet settled.
     pub(crate) inflight: AtomicU64,
+    /// When data last arrived on any link, in milliseconds since `epoch`.
+    last_data: AtomicU64,
+    epoch: Instant,
     /// Append-only: a link keeps its index for the whole download, so chunk and stat indices stay valid.
     routes: RwLock<Vec<Arc<RouteState>>>,
     pub(crate) limit: Option<Arc<Limiter>>,
@@ -280,6 +295,8 @@ impl Shared {
             total: AtomicU64::new(total.unwrap_or(0)),
             settled: AtomicU64::new(0),
             inflight: AtomicU64::new(0),
+            last_data: AtomicU64::new(0),
+            epoch: Instant::now(),
             routes: RwLock::new(opts.routes.iter().map(|r| Arc::new(RouteState::new(r, opts, 0, stop.child_token()))).collect()),
             limit: opts.shared_limit.clone().or_else(|| opts.speed_limit.map(|r| Arc::new(Limiter::new(r)))),
         }
@@ -291,6 +308,22 @@ impl Shared {
 
     pub(crate) fn all(&self) -> Vec<Arc<RouteState>> {
         self.routes.read().unwrap().clone()
+    }
+
+    /// Note that data just arrived.
+    fn touch(&self) {
+        // Stored one higher so that 0 can mean "nothing yet".
+        self.last_data.store(self.epoch.elapsed().as_millis() as u64 + 1, Ordering::Relaxed);
+    }
+
+    fn received_any(&self) -> bool {
+        self.last_data.load(Ordering::Relaxed) > 0
+    }
+
+    /// How long nothing has arrived on any link (since the start when nothing has yet).
+    fn idle_for(&self) -> Duration {
+        let last = self.last_data.load(Ordering::Relaxed).saturating_sub(1);
+        self.epoch.elapsed().saturating_sub(Duration::from_millis(last))
     }
 }
 
@@ -330,7 +363,10 @@ enum FetchErr {
     Cancelled,
     Fatal(Error),
     Throttled(u16),
+    /// The server answered, but not with the data (5xx, a bad mirror).
     Retry(String),
+    /// The connection failed, stalled or broke: the network may be down for every chunk alike.
+    Network(String),
 }
 
 enum Outcome {
@@ -380,12 +416,14 @@ pub async fn download(mut opts: Options, cancel: CancellationToken, emit: Emit) 
         }
     }
     for (i, c) in clients.iter().enumerate().filter(|_| probed.is_none() && !crate::remote::looks_like(&opts.url)) {
-        match probe(c, &opts.url, &headers).await {
-            Ok(p) => {
+        // A connection left half-open by sleep would otherwise wait for an answer forever.
+        match tokio::time::timeout(opts.stall_timeout, probe(c, &opts.url, &headers)).await {
+            Ok(Ok(p)) => {
                 probed = Some((i, p));
                 break;
             }
-            Err(e) => last = Some(e),
+            Ok(Err(e)) => last = Some(e),
+            Err(_) => last = Some(Error::Other("no response from the server".into())),
         }
     }
     let Some((probe_route, probe)) = probed else {
@@ -546,7 +584,11 @@ async fn single(
         disk::ensure_space(&opts.dest_dir, t)?;
     }
     emit(Event::Started { filename: filename.into(), total: probe.total, chunks: 1, ranges: false, resumed_chunks: 0 });
-    let resp = client.get(&probe.final_url).headers(headers_for(&opts.headers, &opts.url, &probe.final_url)).send().await?;
+    let req = client.get(&probe.final_url).headers(headers_for(&opts.headers, &opts.url, &probe.final_url)).send();
+    let resp = tokio::select! {
+        _ = cancel.cancelled() => return Err(Error::Cancelled),
+        r = tokio::time::timeout(opts.stall_timeout, req) => r.map_err(|_| Error::AllFailed("no response from the server".into()))??,
+    };
     if !resp.status().is_success() {
         return Err(Error::Status(resp.status().as_u16()));
     }
@@ -559,7 +601,8 @@ async fn single(
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => return Err(Error::Cancelled),
-                next = stream.next() => match next {
+                // Without a timeout a connection that died while the computer slept would hang here for good.
+                next = tokio::time::timeout(opts.stall_timeout, stream.next()) => match next.map_err(|_| Error::AllFailed("the connection stalled".into()))? {
                     Some(Ok(b)) => {
                         if let Some(l) = &shared.limit { l.acquire(b.len() as u64).await; }
                         if let Some(l) = &shared.route(0).limit {
@@ -596,6 +639,8 @@ async fn supervise(ctx: &Arc<Ctx>, opts: &Options, mut clients: Vec<Client>) {
     }
     let mut tick = tokio::time::interval(Duration::from_millis(250));
     let (mut last_watch, mut no_link_since) = (Instant::now(), None::<Instant>);
+    // No link at all right now (asleep, Wi-Fi off, cable out): wait for one rather than giving up.
+    let mut offline = false;
     loop {
         if ctx.sched.finished() || ctx.abort.is_cancelled() {
             break;
@@ -614,6 +659,7 @@ async fn supervise(ctx: &Arc<Ctx>, opts: &Options, mut clients: Vec<Client>) {
                 last_watch = Instant::now();
                 let w = watch.clone();
                 if let Ok(desired) = tokio::task::spawn_blocking(move || w()).await {
+                    offline = desired.is_empty();
                     reconcile(ctx, opts, &mut defs, &mut clients, &mut set, desired);
                 }
             }
@@ -630,7 +676,7 @@ async fn supervise(ctx: &Arc<Ctx>, opts: &Options, mut clients: Vec<Client>) {
         let running: usize = ctx.shared.all().iter().map(|r| r.workers.load(Ordering::Relaxed)).sum();
         if running == 0 {
             let since = *no_link_since.get_or_insert_with(Instant::now);
-            if since.elapsed() >= opts.no_link_grace {
+            if since.elapsed() >= if offline { opts.offline_grace } else { opts.no_link_grace } {
                 break;
             }
         } else {
@@ -733,6 +779,7 @@ async fn worker(ctx: Arc<Ctx>, route: usize, wid: usize, client: Client, rs: Arc
             }
             Lease::Chunk { idx, start, end, .. } => (idx, start, end),
         };
+        let had = ctx.sched.have(idx).0;
         rs.active.fetch_add(1, Ordering::Relaxed);
         let r = fetch_chunk(&ctx, &client, route, &rs, url_idx, idx, start, end, &mut remote).await;
         rs.active.fetch_sub(1, Ordering::Relaxed);
@@ -771,13 +818,23 @@ async fn worker(ctx: Arc<Ctx>, route: usize, wid: usize, client: Client, rs: Arc
                 fails += 1;
                 sleep_or_stop(&rs, backoff(fails)).await;
             }
-            Err(FetchErr::Retry(msg)) => {
+            Err(e @ (FetchErr::Retry(_) | FetchErr::Network(_))) => {
+                let (msg, network) = match e {
+                    FetchErr::Network(m) => (m, true),
+                    FetchErr::Retry(m) => (m, false),
+                    _ => unreachable!(),
+                };
                 url_idx = (url_idx + 1) % ctx.urls.len();
-                let attempts = ctx.sched.release(idx, true);
+                // A fetch that saved some of the chunk before it broke moved the download forward: not a failed attempt.
+                let progressed = ctx.sched.have(idx).0 > had;
+                let attempts = ctx.sched.release(idx, !progressed);
                 *ctx.last_err.lock().unwrap() = msg.clone();
-                if attempts >= ctx.max_attempts {
+                if attempts >= ctx.max_attempts && (!network || give_up_on_network(&ctx.shared)) {
                     ctx.fail(Error::AllFailed(format!("chunk {idx}: {msg}")));
                     break;
+                }
+                if progressed {
+                    fails = 0;
                 }
                 fails += 1;
                 if fails >= LINK_FAIL_LIMIT {
@@ -790,6 +847,15 @@ async fn worker(ctx: Arc<Ctx>, route: usize, wid: usize, client: Client, rs: Arc
             }
         }
     }
+}
+
+/// Whether a chunk that ran out of attempts on network errors should fail the download. Only when the trouble is that
+/// chunk (data keeps arriving for the others), or when nothing has arrived anywhere for a long time. In between the
+/// network is down (sleep, Wi-Fi reconnecting): every chunk fails for the same reason and the download should wait.
+fn give_up_on_network(shared: &Shared) -> bool {
+    let idle = shared.idle_for();
+    let limit = if shared.received_any() { OUTAGE_LIMIT } else { START_LIMIT };
+    idle < BLAME_WINDOW || idle >= limit
 }
 
 fn backoff(fails: u32) -> Duration {
@@ -856,8 +922,8 @@ async fn open_http(
     let resp = tokio::select! {
         _ = rs.stop.cancelled() => return Err(FetchErr::Cancelled),
         r = tokio::time::timeout(ctx.stall_timeout, req.send()) => match r {
-            Ok(r) => r.map_err(|e| FetchErr::Retry(e.to_string()))?,
-            Err(_) => return Err(FetchErr::Retry("no response from the server".into())),
+            Ok(r) => r.map_err(|e| FetchErr::Network(e.to_string()))?,
+            Err(_) => return Err(FetchErr::Network("no response from the server".into())),
         },
     };
     match resp.status() {
@@ -887,7 +953,8 @@ async fn open_remote(
     use tokio::io::AsyncReadExt;
     let fail = |e: Error| match e {
         Error::Status(401) | Error::Status(404) => FetchErr::Fatal(e),
-        other => FetchErr::Retry(other.to_string()),
+        e @ Error::Status(_) => FetchErr::Retry(e.to_string()),
+        other => FetchErr::Network(other.to_string()),
     };
     if session.is_none() {
         let s = tokio::select! {
@@ -941,7 +1008,7 @@ async fn consume(
             _ = rs.stop.cancelled() => { stop(got, moved, &crc); return Err(FetchErr::Cancelled) }
             n = tokio::time::timeout(ctx.stall_timeout, stream.next()) => match n {
                 Ok(n) => n,
-                Err(_) => { stop(got, moved, &crc); return Err(FetchErr::Retry("the connection stalled".into())) }
+                Err(_) => { stop(got, moved, &crc); return Err(FetchErr::Network("the connection stalled".into())) }
             },
         };
         if ctx.sched.is_done(idx) {
@@ -966,6 +1033,7 @@ async fn consume(
                 got += take as u64;
                 rs.bytes.fetch_add(take as u64, Ordering::Relaxed);
                 ctx.shared.inflight.fetch_add(take as u64, Ordering::Relaxed);
+                ctx.shared.touch();
                 // Checkpoint about every MiB so even a crash loses little; the saved part is re-checked on resume.
                 if got - last_saved >= CHECKPOINT && pos <= end {
                     last_saved = got;
@@ -982,11 +1050,11 @@ async fn consume(
             }
             Some(Err(e)) => {
                 stop(got, moved, &crc);
-                return Err(FetchErr::Retry(e.to_string()));
+                return Err(FetchErr::Network(e.to_string()));
             }
             None => {
                 stop(got, moved, &crc);
-                return Err(FetchErr::Retry("connection closed before the chunk finished".into()));
+                return Err(FetchErr::Network("connection closed before the chunk finished".into()));
             }
         }
     }
@@ -1093,16 +1161,27 @@ fn slow_tail(ctx: &Ctx, me: &RouteState) -> bool {
 fn spawn_ramp(shared: Arc<Shared>, interval: Duration) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         // One ramp per link state; a restarted link gets a new state and so a fresh ramp.
-        let mut ramps: Vec<(Arc<RouteState>, Ramp)> = Vec::new();
+        // Each with when the throttling ceiling was last lifted.
+        let mut ramps: Vec<(Arc<RouteState>, Ramp, Instant)> = Vec::new();
         loop {
             tokio::time::sleep(interval).await;
             for (i, r) in shared.all().into_iter().enumerate() {
                 if ramps.len() <= i {
-                    ramps.push((r.clone(), Ramp::new(r.max, true)));
+                    ramps.push((r.clone(), Ramp::new(r.max, true), Instant::now()));
                 } else if !Arc::ptr_eq(&ramps[i].0, &r) {
-                    ramps[i] = (r.clone(), Ramp::new(r.max, true));
+                    ramps[i] = (r.clone(), Ramp::new(r.max, true), Instant::now());
                 }
-                let ramp = &mut ramps[i].1;
+                let (_, ramp, lifted) = &mut ramps[i];
+                // Throttling is often brief (a burst limit, a busy minute). Without this, a few 429/503 answers would
+                // leave the link on one connection for the rest of the download, at whatever one connection gets.
+                let ceiling = r.ceiling.load(Ordering::Relaxed);
+                if ceiling < r.max && r.last_throttle.lock().unwrap().elapsed() >= THROTTLE_LIFT && lifted.elapsed() >= THROTTLE_LIFT {
+                    *lifted = Instant::now();
+                    r.ceiling.store(ceiling + 1, Ordering::Relaxed);
+                    ramp.ceiling = ceiling + 1;
+                    ramp.allowed = (ramp.allowed + 1).min(ramp.ceiling);
+                    r.allowed.store(ramp.allowed, Ordering::Relaxed);
+                }
                 ramp.allowed = r.allowed.load(Ordering::Relaxed);
                 // Throttling lowers the ceiling from the worker side.
                 let ceiling = r.ceiling.load(Ordering::Relaxed);

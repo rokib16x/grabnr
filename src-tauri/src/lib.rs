@@ -1,4 +1,5 @@
 mod api;
+mod awake;
 mod deeplink;
 mod history;
 mod manager;

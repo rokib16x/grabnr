@@ -162,7 +162,9 @@ impl Scheduler {
         Some(delta)
     }
 
-    /// A worker gives a chunk back. Returns how many times it has failed so far.
+    /// A worker gives a chunk back. Returns how many times it has failed so far. A chunk handed back without a failure
+    /// (lost a race, link drained, partly saved) is next in line; a failed one goes to the back, so the workers that
+    /// pick it up next spread over other chunks instead of all retrying the same one until it runs out of attempts.
     pub fn release(&self, idx: usize, failed: bool) -> u32 {
         let mut g = self.0.lock().unwrap();
         if failed {
@@ -172,7 +174,11 @@ impl Scheduler {
             State::Active { workers, since } if workers > 1 => g.state[idx] = State::Active { workers: workers - 1, since },
             State::Active { .. } => {
                 g.state[idx] = State::Pending;
-                g.pending.push_front(idx);
+                if failed {
+                    g.pending.push_back(idx);
+                } else {
+                    g.pending.push_front(idx);
+                }
             }
             _ => {}
         }
@@ -250,11 +256,15 @@ mod tests {
     }
 
     #[test]
-    fn released_chunk_returns_to_the_front() {
+    fn handed_back_chunk_is_next_but_a_failed_one_waits_its_turn() {
         let s = Scheduler::new(plan(30, 10), &[]);
         let Lease::Chunk { idx, .. } = s.lease() else { panic!() };
-        assert_eq!(s.release(idx, true), 1);
+        assert_eq!(s.release(idx, false), 0);
         assert!(matches!(s.lease(), Lease::Chunk { idx: 0, raced: false, .. }));
+        assert_eq!(s.release(0, true), 1);
+        assert!(matches!(s.lease(), Lease::Chunk { idx: 1, .. }), "the failed chunk went to the back");
+        assert!(matches!(s.lease(), Lease::Chunk { idx: 2, .. }));
+        assert!(matches!(s.lease(), Lease::Chunk { idx: 0, .. }));
     }
 
     #[test]

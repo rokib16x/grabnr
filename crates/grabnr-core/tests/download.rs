@@ -410,7 +410,7 @@ async fn gives_up_when_no_link_returns_within_the_grace_period() {
     let s = serve(true).await;
     let mut o = slow_options(format!("http://127.0.0.1:{}/x2.bin", s.port), "nolink", vec![Route::unbound("a")]);
     o.link_watch = Some(watch(|t| if t < std::time::Duration::from_millis(300) { vec![Route::unbound("a")] } else { vec![] }));
-    o.no_link_grace = std::time::Duration::from_millis(800);
+    o.offline_grace = std::time::Duration::from_millis(800);
     let err = download(o, CancellationToken::new(), silent()).await.unwrap_err();
     assert!(matches!(err, Error::AllFailed(_)), "{err}");
 }

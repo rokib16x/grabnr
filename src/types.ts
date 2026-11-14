@@ -57,6 +57,7 @@ export type Settings = {
   quarantine: boolean;
   keychain: boolean;
   hls_to_mp4: boolean;
+  prevent_sleep: boolean;
   ssh_key: string;
 };
 

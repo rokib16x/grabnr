@@ -249,7 +249,7 @@ export function AddDialog({ defaultDir, pending, onClose }: { defaultDir?: strin
           </div>
         )}
         <p className="hint">
-          {many ? t("{n} links will be added.", { n: urls.length }) : urls[0] && /^ftp:/i.test(urls[0]) ? t("FTP sends the password without encryption. Use sftp:// if the server offers it.") : urls[0] && /^magnet:/i.test(urls[0]) ? t("Torrents are split by file over your connections. A single large file uses one connection.") : t("grabnr splits the file into chunks and pulls them over every connection you have enabled in Manage Connections. Metalink files (.meta4) add their mirrors and checksum automatically.")}
+          {many ? t("{n} links will be added.", { n: urls.length }) : urls[0] && /^ftp:/i.test(urls[0]) ? t("FTP sends the password without encryption. Use sftp:// if the server offers it.") : urls[0] && /^magnet:/i.test(urls[0]) ? t("Torrent peers are spread over your connections, so even a single large file downloads over all of them.") : t("grabnr splits the file into chunks and pulls them over every connection you have enabled in Manage Connections. Metalink files (.meta4) add their mirrors and checksum automatically.")}
         </p>
 
         {err && <p className="err" role="alert">{err}</p>}

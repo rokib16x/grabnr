@@ -3,7 +3,7 @@ import { api, onOpenSettings, onPendingAdd } from "./api";
 import { AddDialog } from "./AddDialog";
 import { CommandPalette, type Command } from "./CommandPalette";
 import { DownloadRow, progressOf, type DragProps } from "./DownloadRow";
-import { fileName } from "./format";
+import { eta, fileName, linkColor, rate } from "./format";
 import { HistoryView } from "./HistoryView";
 import { Icon } from "./icons";
 import { Inspector } from "./Inspector";
@@ -47,6 +47,29 @@ function remembered<T extends string>(key: string, fallback: T, allowed: readonl
   } catch {
     return fallback;
   }
+}
+
+/** Live overview under the title: total speed split by link, active count, links in use, and time left for everything. */
+function Overview({ items, live, links, linkSpeeds }: { items: Item[]; live: Record<string, Live>; links: { name: string }[]; linkSpeeds: Map<string, number> }) {
+  const running = items.filter((i) => i.status === "downloading");
+  const speed = running.reduce((a, i) => a + (live[i.id]?.speed ?? 0), 0);
+  const left = running.reduce((a, i) => a + (i.total ? Math.max(0, i.total - progressOf(i, live[i.id]).downloaded) : 0), 0);
+  const busy = links.filter((l) => (linkSpeeds.get(l.name) ?? 0) > 0);
+  const total = busy.reduce((a, l) => a + (linkSpeeds.get(l.name) ?? 0), 0) || 1;
+  return (
+    <div className="overview" aria-live="off">
+      <div className="ov-card ov-speed">
+        <small>{t("Speed")}</small>
+        <b>{running.length ? rate(speed) : t("Idle")}</b>
+        <div className="ov-split" aria-hidden="true">
+          {busy.length ? busy.map((l) => <span key={l.name} style={{ flexGrow: linkSpeeds.get(l.name)! / total, background: linkColor(l.name) }} />) : <span style={{ flexGrow: 1 }} />}
+        </div>
+      </div>
+      <div className="ov-card"><small>{t("Downloading")}</small><b>{running.length}</b></div>
+      <div className="ov-card"><small>{t("Connections")}</small><b>{busy.length}<i>/{links.length}</i></b></div>
+      <div className="ov-card"><small>{t("Time left")}</small><b>{speed > 0 && left > 0 ? eta(left, speed) : "—"}</b></div>
+    </div>
+  );
 }
 
 /** URLs in dropped text or a dropped text file; one per line or whitespace separated. */
@@ -215,8 +238,8 @@ export function MainWindow() {
               </div>
             )}
           </div>
+          <button className="primary add" title={t("Add download ({key}N)", { key: MOD })} onClick={() => setAdding(true)}><Icon name="plus" />{t("Add Download")}</button>
           <div className="tools">
-            <button className="round" aria-label={t("Add download")} title={t("Add download ({key}N)", { key: MOD })} onClick={() => setAdding(true)}><Icon name="plus" /></button>
             <button className="round" aria-label={t("Resume all")} title={t("Resume all")} disabled={!canResume} onClick={() => api.resumeAll()}><Icon name="play" /></button>
             <button className="round" aria-label={t("Pause all")} title={t("Pause all")} disabled={!canPause} onClick={() => api.pauseAll()}><Icon name="pause" /></button>
             <button className="round" aria-label={t("Remove completed")} title={t("Remove completed from the list")} disabled={!hasDone} onClick={() => d.items.filter((i) => i.status === "done").forEach((i) => api.remove(i.id, false))}><Icon name="trash" /></button>
@@ -240,6 +263,7 @@ export function MainWindow() {
           </label>
         </header>
 
+        {filter !== "history" && <Overview items={d.items} live={d.live} links={d.links} linkSpeeds={d.linkSpeeds} />}
         {filter === "history" ? (
           <div className="content single">
             <main><HistoryView links={d.links} refreshKey={doneCount} /></main>

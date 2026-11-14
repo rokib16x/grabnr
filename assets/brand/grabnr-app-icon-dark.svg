@@ -1,10 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024"><defs><linearGradient id="g" x1="70" y1="70" x2="440" y2="450" gradientUnits="userSpaceOnUse">
-<stop offset="0" stop-color="#3DBBFF"/><stop offset=".55" stop-color="#1F7BFF"/><stop offset="1" stop-color="#1646E0"/></linearGradient></defs><rect width="1024" height="1024" rx="230" fill="#0F1530"/><g transform="translate(128 128) scale(1.5)"><defs><mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512"><rect width="512" height="512" fill="#fff"/><rect x="0" y="205" width="270" height="14" fill="#000"/><rect x="0" y="293" width="270" height="14" fill="#000"/></mask></defs>
-<g fill="none" stroke="url(#g)" stroke-width="64">
-<path mask="url(#m)" d="M366.4 141A150 150 0 1 0 308.8 400.9"/>
-</g>
-<g fill="url(#g)"><circle cx="58" cy="212" r="15"/><circle cx="96" cy="212" r="0"/><circle cx="40" cy="300" r="11"/><circle cx="76" cy="352" r="9"/><circle cx="70" cy="120" r="8"/><circle cx="120" cy="84" r="5"/></g>
-<g fill="none" stroke="url(#g)" stroke-width="52" stroke-linecap="butt" stroke-linejoin="round">
-<path d="M290 256H372V320"/>
-</g>
-<polygon points="322,316 422,316 372,374" fill="url(#g)" stroke="url(#g)" stroke-width="16" stroke-linejoin="round"/></g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024"><g transform="translate(100.00 100.00) scale(3.21875)"><defs><linearGradient id="d" x1="0" y1="0" x2="0.35" y2="1"><stop offset="0" stop-color="#1e293b"/><stop offset="1" stop-color="#0f172a"/></linearGradient></defs><rect width="256" height="256" rx="58" fill="url(#d)"/><g fill="none" stroke-width="30" stroke-linejoin="round" stroke-linecap="butt"><path d="M71.98 122.71A46 46 0 0 1 96.77 61.35" stroke="#bef264"/><path d="M107.60 58.45A46 46 0 1 1 115.61 149.97" stroke="#ffffff"/><path d="M106.01 149.30A46 46 0 0 1 77.75 132.32" stroke="#ffffff"/></g><path fill="none" stroke-width="30" stroke-linejoin="round" stroke-linecap="round" stroke="#ffffff" d="M166 60V170C166 206 138 216 114 216C98 216 86 211 77 202"/></g></svg>

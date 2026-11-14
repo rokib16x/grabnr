@@ -4,6 +4,30 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Sleep:** grabnr keeps the computer from going to sleep on its own while something is downloading (Preferences → System; on by default). Closing the lid still sleeps.
+
+### Fixed
+- **Torrents:** peers that are choking us are no longer dropped after 10 seconds of quiet. Each drop pushed that peer's next try further out (up to an hour), so downloads ran in short bursts and slowly dried up.
+- **Torrents:** a torrent that receives nothing for 90 seconds (after sleep, or a network drop) rebuilds its peer list and asks the trackers and DHT again instead of sitting at 0 B/s for hours.
+- **Torrents:** links that go away and come back (Wi-Fi after sleep, a cable plugged in) are followed while a torrent runs; peer connections whose far end vanished are closed instead of being held open forever.
+- **Downloads:** a short network outage no longer fails the download. Failed pieces go to the back of the queue instead of being retried by every connection at once, network errors count against a piece only while other pieces are arriving, and with no network at all grabnr waits for it to come back.
+- **Downloads:** a server that throttled a link (HTTP 429/503) gets connections back a minute after it stops, instead of leaving the link on one connection for the rest of the download.
+- **Downloads:** a connection that died during sleep can no longer hang the first request or a single-stream download forever.
+- **Downloads:** automatic retries start over after a run that made progress, so a long download is not marked failed because of drops hours apart.
+
+## [0.1.4] - 2026-11-14
+
+### Added
+- **Torrents:** with several links, peer connections are spread over all of them, so even a single large file downloads over Wi-Fi and Ethernet at once.
+
+### Changed
+- **Look:** new logo and app icon, Plus Jakarta Sans and JetBrains Mono fonts, Phosphor icons, a speed overview strip, redesigned file tiles and download rows.
+- **Browser extension:** new icons; version now follows the app.
+
+### Fixed
+- **Sidebar:** high speeds and long link names no longer widen the sidebar or add a horizontal scrollbar.
+
 ## [0.1.3] - 2026-10-08
 
 ### Fixed

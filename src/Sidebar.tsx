@@ -30,7 +30,7 @@ export function Sidebar({ items, filter, onFilter, links, linkSpeeds, settings, 
     <li key={id}>
       <button className={`nav-item${filter === id ? " on" : ""}`} onClick={() => onFilter(id)} aria-current={filter === id}>
         <Icon name={icon} size={16} />
-        <span>{label}</span>
+        <span title={label}>{label}</span>
         {n ? <small>{n}</small> : null}
       </button>
     </li>
@@ -59,7 +59,7 @@ export function Sidebar({ items, filter, onFilter, links, linkSpeeds, settings, 
         {links.map((l) => (
           <li key={l.name} className={enabled(l.name) ? "" : "off"}>
             <i className="tile" style={{ background: linkColor(l.name) }}><Icon name={linkIcon(l.kind)} size={14} /></i>
-            <span className="conn-name" title={`${l.name} · ${l.ipv4}`}>{l.label}</span>
+            <span className="conn-name" title={`${l.label} · ${l.name} · ${l.ipv4}`}>{l.label}</span>
             <small>{linkSpeeds.get(l.name) ? rate(linkSpeeds.get(l.name)!) : enabled(l.name) ? t("Idle") : t("Off")}</small>
           </li>
         ))}

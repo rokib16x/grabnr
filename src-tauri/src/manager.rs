@@ -152,6 +152,9 @@ pub struct Settings {
     /// Turn downloaded HLS videos into MP4 files when ffmpeg is installed.
     #[serde(default = "yes")]
     pub hls_to_mp4: bool,
+    /// Keep the computer from going to sleep on its own while something is downloading.
+    #[serde(default = "yes")]
+    pub prevent_sleep: bool,
 }
 
 /// What to do once the queue has finished. Never saved: a forgotten "sleep" must not surprise the next session.
@@ -216,6 +219,7 @@ pub struct SettingsPatch {
     pub quarantine: Option<bool>,
     pub keychain: Option<bool>,
     pub hls_to_mp4: Option<bool>,
+    pub prevent_sleep: Option<bool>,
     pub ssh_key: Option<String>,
 }
 
@@ -252,6 +256,8 @@ struct Inner {
 struct Run {
     started: Instant,
     seen: HashMap<String, u64>,
+    /// Bytes the download had when this run started.
+    from: u64,
 }
 
 pub struct Manager {
@@ -271,6 +277,7 @@ pub struct Manager {
     keychain_error: Mutex<Option<String>>,
     limiter: Arc<Limiter>,
     effect: Mutex<Effect>,
+    awake: crate::awake::KeepAwake,
     pub api_ok: Mutex<bool>,
 }
 
@@ -323,6 +330,7 @@ impl Manager {
                 quarantine: true,
                 keychain: false,
                 hls_to_mp4: true,
+                prevent_sleep: true,
                 ssh_key: String::new(),
             });
         #[cfg(target_os = "macos")]
@@ -367,6 +375,7 @@ impl Manager {
             secrets,
             keychain_error: Mutex::new(None),
             limiter: Arc::new(Limiter::new(0)),
+            awake: crate::awake::KeepAwake::new(),
             effect: Mutex::new(Effect::default()),
             api_ok: Mutex::new(false),
         });
@@ -479,6 +488,9 @@ impl Manager {
             if let Some(v) = p.ssh_key {
                 g.settings.ssh_key = v.trim().to_string();
             }
+            if let Some(v) = p.prevent_sleep {
+                g.settings.prevent_sleep = v;
+            }
             if let Some(v) = p.hls_to_mp4 {
                 g.settings.hls_to_mp4 = v;
             }
@@ -493,6 +505,7 @@ impl Manager {
             let items = self.inner.lock().unwrap().items.clone();
             crate::secrets::forget_all(&items, &*self.secrets);
         }
+        self.update_awake();
         self.apply_schedule_now();
     }
 
@@ -716,6 +729,16 @@ impl Manager {
         }
         self.persist();
         self.emit_item(id);
+        self.update_awake();
+    }
+
+    /// Hold off idle sleep exactly while something is downloading (and the setting allows it).
+    fn update_awake(&self) {
+        let on = {
+            let g = self.inner.lock().unwrap();
+            g.settings.prevent_sleep && !g.cancels.is_empty()
+        };
+        self.awake.set(on);
     }
 
     fn emit_item(&self, id: &str) {
@@ -737,7 +760,10 @@ impl Manager {
                     pick_next(&g.items, &g.cancels, &g.retry_at, Instant::now())
                 }
             };
-            let Some(item) = next else { return };
+            let Some(item) = next else {
+                self.update_awake();
+                return;
+            };
             self.start(item);
         }
     }
@@ -781,7 +807,7 @@ impl Manager {
             let mut g = self.inner.lock().unwrap();
             let c = CancellationToken::new();
             g.cancels.insert(item.id.clone(), c.clone());
-            g.runs.insert(item.id.clone(), Run { started: Instant::now(), seen: HashMap::new() });
+            g.runs.insert(item.id.clone(), Run { started: Instant::now(), seen: HashMap::new(), from: item.downloaded });
             (g.settings.conns_per_route, g.settings.proxy.clone(), c)
         };
         self.set_status(&item.id, Status::Downloading, None);
@@ -1172,9 +1198,14 @@ impl Manager {
             let mut g = self.inner.lock().unwrap();
             g.cancels.remove(id);
             g.speeds.remove(id);
-            if let Some(secs) = g.runs.remove(id).map(|r| r.started.elapsed().as_secs_f64()) {
+            if let Some(run) = g.runs.remove(id) {
                 if let Some(i) = g.items.iter_mut().find(|i| i.id == id) {
-                    i.stats.active_secs += secs;
+                    i.stats.active_secs += run.started.elapsed().as_secs_f64();
+                    // A run that moved the download forward earns it a fresh set of automatic retries: the budget is
+                    // for a download that keeps failing, not one that ran for hours before the network dropped.
+                    if i.downloaded > run.from {
+                        i.retries = 0;
+                    }
                 }
             }
             let held = g.held.remove(id);

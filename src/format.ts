@@ -21,8 +21,8 @@ export function eta(remaining: number, bps: number): string {
   return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 }
 
-const KIND_COLORS: Record<string, string> = { wi_fi: "#34c759", ethernet: "#0a84ff", cellular: "#af52de", other: "#ff9f0a", tunnel: "#5ac8fa" };
-const SPARE = ["#ff375f", "#64d2ff", "#ffd60a", "#bf5af2", "#30d158", "#ff6b57"];
+const KIND_COLORS: Record<string, string> = { wi_fi: "#10b981", ethernet: "#2563eb", cellular: "#a855f7", other: "#f59e0b", tunnel: "#06b6d4" };
+const SPARE = ["#ec4899", "#14b8a6", "#eab308", "#8b5cf6", "#22c55e", "#f97316"];
 const registry = new Map<string, string>();
 
 /** Give each network link one colour, by kind, used by the sidebar, share bars, chunk map and graph. */
@@ -53,35 +53,36 @@ export const fileName = (url: string, filename: string | null) => {
 };
 
 const KINDS: [RegExp, string, string][] = [
-  [/^(zip|rar|7z|tar|gz|tgz|bz2|xz|zst)$/, "#ff9f0a", "#e08600"],
-  [/^(dmg|iso|img|pkg)$/, "#8e8e93", "#636366"],
-  [/^(mp4|mkv|mov|avi|webm|m4v)$/, "#0a84ff", "#0060d0"],
-  [/^(mp3|m4a|flac|wav|aac|ogg)$/, "#ff375f", "#d70f3c"],
-  [/^(pdf)$/, "#ff453a", "#d62a20"],
-  [/^(png|jpe?g|gif|webp|heic|svg)$/, "#30b0c7", "#1a8fa3"],
-  [/^(exe|msi|deb|rpm|apk|appimage|app)$/, "#5e5ce6", "#4240b8"],
+  [/^(zip|rar|7z|tar|gz|tgz|bz2|xz|zst)$/, "#f59e0b", "#b45309"],
+  [/^(dmg|iso|img|pkg)$/, "#64748b", "#334155"],
+  [/^(mp4|mkv|mov|avi|webm|m4v|ts)$/, "#3b82f6", "#1d4ed8"],
+  [/^(mp3|m4a|flac|wav|aac|ogg)$/, "#ec4899", "#be185d"],
+  [/^(pdf)$/, "#f97316", "#c2410c"],
+  [/^(docx?|txt|md|rtf|epub)$/, "#0ea5e9", "#0369a1"],
+  [/^(png|jpe?g|gif|webp|heic|svg)$/, "#a855f7", "#7e22ce"],
+  [/^(exe|msi|deb|rpm|apk|appimage|app)$/, "#6366f1", "#4338ca"],
 ];
 /** Tile colours and label for a file, picked from its extension. */
 export function fileKind(name: string) {
   const ext = (name.split(".").pop() ?? "").toLowerCase();
   const hit = KINDS.find(([re]) => re.test(ext));
-  return { from: hit?.[1] ?? "#64a8ff", to: hit?.[2] ?? "#2f7cf6", label: ext.length > 0 && ext.length <= 4 && ext !== name.toLowerCase() ? ext.toUpperCase() : "FILE" };
+  return { from: hit?.[1] ?? "#94a3b8", to: hit?.[2] ?? "#475569", label: ext.length > 0 && ext.length <= 4 && ext !== name.toLowerCase() ? ext.toUpperCase() : "FILE" };
 }
 
 export type Category = "video" | "audio" | "image" | "document" | "archive" | "disk" | "app" | "other";
 export const CATEGORIES: { id: Category; label: string; icon: string }[] = [
-  { id: "video", label: msg("Video"), icon: "play" },
-  { id: "audio", label: msg("Audio"), icon: "bolt" },
-  { id: "image", label: msg("Images"), icon: "search" },
-  { id: "document", label: msg("Documents"), icon: "folder" },
-  { id: "archive", label: msg("Archives"), icon: "inbox" },
-  { id: "disk", label: msg("Disk images"), icon: "download" },
-  { id: "app", label: msg("Apps"), icon: "sliders" },
-  { id: "other", label: msg("Other"), icon: "link" },
+  { id: "video", label: msg("Video"), icon: "video" },
+  { id: "audio", label: msg("Audio"), icon: "audio" },
+  { id: "image", label: msg("Images"), icon: "image" },
+  { id: "document", label: msg("Documents"), icon: "document" },
+  { id: "archive", label: msg("Archives"), icon: "archive" },
+  { id: "disk", label: msg("Disk images"), icon: "disk" },
+  { id: "app", label: msg("Apps"), icon: "app" },
+  { id: "other", label: msg("Other"), icon: "file" },
 ];
 
 const CAT_EXT: [Category, RegExp][] = [
-  ["video", /^(mp4|mkv|mov|avi|webm|m4v|wmv|flv)$/],
+  ["video", /^(mp4|mkv|mov|avi|webm|m4v|wmv|flv|ts)$/],
   ["audio", /^(mp3|m4a|flac|wav|aac|ogg|opus)$/],
   ["image", /^(png|jpe?g|gif|webp|heic|svg|tiff?|bmp)$/],
   ["document", /^(pdf|docx?|xlsx?|pptx?|txt|md|epub|csv|rtf)$/],

@@ -1,20 +1,24 @@
 //! BitTorrent and magnet links.
 //!
-//! The torrent engine (librqbit) binds a whole session to one network link and cannot hand out pieces across sessions.
-//! grabnr therefore splits a multi-file torrent by file: one session per link, each downloading its own share of the
-//! files, largest first to the least loaded link. A single-file torrent runs on one link (the fastest). Nothing is
-//! uploaded: the sessions stop when the files are complete.
+//! The torrent engine (librqbit) binds a whole session to one network link. With several links, grabnr instead sends
+//! every peer connection through a local SOCKS5 proxy ([`crate::spread`]) that opens each one over the least busy link,
+//! so one session, and even a single file, downloads over all links at once: each peer is reached over one link, and
+//! different peers over different links. Nothing is uploaded: the session stops when the files are complete.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use librqbit::{AddTorrent, AddTorrentOptions, AddTorrentResponse, DhtSessionConfig, ManagedTorrent, Session, SessionOptions};
+use librqbit::{
+    AddTorrent, AddTorrentOptions, AddTorrentResponse, ConnectionOptions, DhtSessionConfig, PeerConnectionOptions, Session,
+    SessionOptions, TorrentStatsState,
+};
 use tokio_util::sync::CancellationToken;
 
 use crate::download::{Emit, Event, Options, RouteStat, Snapshot};
 use crate::error::{Error, Result};
+use crate::spread::Spread;
 
 /// A magnet link, or a link to a `.torrent` file.
 pub fn looks_like(url: &str) -> bool {
@@ -30,32 +34,32 @@ pub fn magnet_name(url: &str) -> Option<String> {
     u.query_pairs().find(|(k, _)| k == "dn").map(|(_, v)| v.into_owned()).filter(|v| !v.is_empty())
 }
 
-/// Split files over `n` links: largest first, each to the link with the least bytes so far. Returns the file indexes per
-/// link; a link with nothing to do gets an empty list.
-pub fn partition(files: &[(usize, u64)], n: usize) -> Vec<Vec<usize>> {
-    let n = n.max(1);
-    let mut out: Vec<Vec<usize>> = vec![Vec::new(); n];
-    let mut load = vec![0u64; n];
-    let mut order: Vec<&(usize, u64)> = files.iter().collect();
-    order.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    for &(idx, len) in order {
-        let k = (0..n).min_by_key(|&k| (load[k], k)).unwrap_or(0);
-        out[k].push(idx);
-        load[k] += len;
-    }
-    for v in &mut out {
-        v.sort_unstable();
-    }
-    out
-}
+/// How long a peer may stay silent before its connection is dropped. A peer that is choking us sends nothing but a
+/// keep-alive every two minutes, so librqbit's default of 10 s drops perfectly good peers over and over. Every drop
+/// also pushes that peer's next attempt further out (10 s, 1 min, 6 min, 36 min, then hourly), which is what made
+/// downloads run in bursts and then slow to a crawl.
+const PEER_TIMEOUT: Duration = Duration::from_secs(150);
+/// Send our own keep-alive well inside the two minutes other clients wait for.
+const KEEP_ALIVE: Duration = Duration::from_secs(60);
+/// With no data at all for this long, rebuild the peer list: ask the trackers and DHT again and retry every peer
+/// right away instead of waiting out the backoff they piled up while the computer slept or the network was down.
+const STALL_FIRST: Duration = Duration::from_secs(90);
+/// The wait doubles after each rebuild that did not help, up to this, so a swarm with no seeders is not hammered.
+const STALL_MAX: Duration = Duration::from_secs(600);
 
 fn bt(e: impl std::fmt::Display) -> Error {
     Error::Other(format!("torrent: {e}"))
 }
 
-async fn session(dir: &std::path::Path, device: Option<String>, opts: &Options) -> Result<Arc<Session>> {
+/// How the session reaches peers: bound to one interface, or through a local proxy that spreads them over several links.
+#[derive(Clone)]
+enum Via {
+    Device(Option<String>),
+    Proxy(String),
+}
+
+async fn session(dir: &std::path::Path, via: &Via, opts: &Options) -> Result<Arc<Session>> {
     let mut so = SessionOptions {
-        bind_device_name: device,
         // Download only: no listening port, no remembered state between runs.
         persistence: None,
         fastresume: false,
@@ -64,6 +68,16 @@ async fn session(dir: &std::path::Path, device: Option<String>, opts: &Options) 
         ipv4_only: true,
         ..Default::default()
     };
+    let peer_opts =
+        Some(PeerConnectionOptions { connect_timeout: None, read_write_timeout: Some(PEER_TIMEOUT), keep_alive_interval: Some(KEEP_ALIVE) });
+    let proxy_url = match via {
+        Via::Device(d) => {
+            so.bind_device_name = d.clone();
+            None
+        }
+        Via::Proxy(url) => Some(url.clone()),
+    };
+    so.connect = Some(ConnectionOptions { proxy_url, peer_opts, ..Default::default() });
     if opts.torrent_peers.is_empty() {
         so.dht = Some(DhtSessionConfig { persistence: None, ..Default::default() });
     } else {
@@ -72,13 +86,6 @@ async fn session(dir: &std::path::Path, device: Option<String>, opts: &Options) 
         so.disable_trackers = true;
     }
     Session::new_with_opts(dir.to_path_buf(), so).await.map_err(bt)
-}
-
-struct Part {
-    session: Arc<Session>,
-    handle: Arc<ManagedTorrent>,
-    link: String,
-    files: Vec<usize>,
 }
 
 /// Download a torrent into `opts.dest_dir`. Returns the file, or the folder of a multi-file torrent.
@@ -97,9 +104,17 @@ pub async fn download(opts: &Options, cancel: CancellationToken, emit: Emit) -> 
         AddTorrent::from_url(opts.url.clone())
     };
 
-    // 1. Learn what is in it (on the first link).
-    let device_of = |i: usize| opts.routes[i].link.as_ref().map(|l| l.name.clone());
-    let lister = session(&dir, device_of(0), opts).await?;
+    // Several links, or links that may change while it runs (Wi-Fi gone during sleep, a cable plugged in): every peer
+    // connection goes through the spreading proxy, which follows the links and pulls even a single file over all of
+    // them. One fixed link: bind the session to it.
+    let spread = if opts.routes.len() > 1 || opts.link_watch.is_some() { Some(Spread::start(opts.routes.clone()).await?) } else { None };
+    let via = match &spread {
+        Some(s) => Via::Proxy(s.url()),
+        None => Via::Device(opts.routes[0].link.as_ref().map(|l| l.name.clone())),
+    };
+
+    // 1. Learn what is in it.
+    let lister = session(&dir, &via, opts).await?;
     let list_opts = AddTorrentOptions { list_only: true, initial_peers: some_peers(&opts.torrent_peers), ..Default::default() };
     let listed = tokio::select! {
         _ = cancel.cancelled() => { lister.stop().await; return Err(Error::Cancelled) }
@@ -119,73 +134,108 @@ pub async fn download(opts: &Options, cancel: CancellationToken, emit: Emit) -> 
     let folder = crate::probe::sanitize(&name);
     crate::disk::ensure_space(&dir, total)?;
 
-    // 2. One session per link that has files to fetch. A single-file torrent uses the fastest link only.
-    let usable: Vec<usize> = if multi {
-        (0..opts.routes.len()).collect()
-    } else {
-        let best =
-            (0..opts.routes.len()).max_by_key(|&i| opts.routes[i].link.as_ref().and_then(|l| l.link_speed_mbps).unwrap_or(0)).unwrap_or(0);
-        vec![best]
-    };
-    let shares = partition(&files, usable.len());
+    // 2. Fetch it.
     emit(Event::Started { filename: name.clone(), total: Some(total), chunks: files.len(), ranges: true, resumed_chunks: 0 });
-
-    let mut parts: Vec<Part> = Vec::new();
-    for (k, share) in shares.iter().enumerate().filter(|(_, s)| !s.is_empty()) {
-        let route = usable[k];
-        let sess = session(&dir, device_of(route), opts).await?;
-        let add = AddTorrentOptions {
-            only_files: Some(share.clone()),
-            overwrite: true,
-            // A multi-file torrent goes into a folder of its own, named after the torrent.
-            sub_folder: multi.then(|| folder.clone()),
-            initial_peers: some_peers(&opts.torrent_peers),
-            ..Default::default()
-        };
-        let resp = sess.add_torrent(AddTorrent::from_bytes(torrent_bytes.clone()), Some(add)).await.map_err(bt)?;
-        let handle = resp.into_handle().ok_or_else(|| bt("the torrent was not started"))?;
-        parts.push(Part { session: sess, handle, link: opts.routes[route].name.clone(), files: share.clone() });
-    }
+    let sess = session(&dir, &via, opts).await?;
+    let add = AddTorrentOptions {
+        overwrite: true,
+        // A multi-file torrent goes into a folder of its own, named after the torrent.
+        sub_folder: multi.then(|| folder.clone()),
+        initial_peers: some_peers(&opts.torrent_peers),
+        ..Default::default()
+    };
+    let resp = sess.add_torrent(AddTorrent::from_bytes(torrent_bytes), Some(add)).await.map_err(bt)?;
+    let handle = resp.into_handle().ok_or_else(|| bt("the torrent was not started"))?;
 
     // 3. Report progress until everything is on disk.
     let mut announced = vec![false; files.len()];
+    let mut rates: Vec<f64> = Vec::new();
+    let mut last: Option<(Instant, Vec<u64>)> = None;
+    // Stall watchdog: what was last seen arriving, since when nothing new has, and how long to allow before acting.
+    let (mut seen, mut quiet_since, mut stall_after) = ((0u64, 0u64), Instant::now(), STALL_FIRST);
+    let mut last_watch = Instant::now();
     let result = loop {
-        let mut done_bytes = 0u64;
-        let mut stats = Vec::new();
-        let mut all_done = true;
-        for p in &parts {
-            let s = p.handle.stats();
-            done_bytes += p.files.iter().map(|&f| s.file_progress.get(f).copied().unwrap_or(0)).sum::<u64>();
-            all_done &= s.finished;
-            for &f in &p.files {
-                if !announced[f] && s.file_progress.get(f).copied().unwrap_or(0) >= files[f].1 {
-                    announced[f] = true;
-                    let route = parts.iter().position(|q| q.link == p.link).unwrap_or(0);
-                    emit(Event::ChunkDone { idx: f, route });
-                }
-            }
-            let bps = s.live.as_ref().map(|l| l.download_speed.mbps * 1024.0 * 1024.0).unwrap_or(0.0);
-            stats.push((
-                p.link.clone(),
-                p.files.iter().map(|&f| s.file_progress.get(f).copied().unwrap_or(0)).sum::<u64>(),
-                bps,
-                s.error.clone(),
-            ));
-        }
-        if let Some(e) = stats.iter().find_map(|s| s.3.clone()) {
+        let s = handle.stats();
+        if let Some(e) = s.error.clone() {
             break Err(bt(e));
         }
-        let speed: f64 = stats.iter().map(|s| s.2).sum();
-        emit(Event::Progress(Snapshot {
-            downloaded: done_bytes.min(total),
-            total: Some(total),
-            bytes_per_sec: speed,
-            routes: stats
-                .iter()
-                .map(|(n, b, v, _)| RouteStat { name: n.clone(), bytes: *b, bytes_per_sec: *v, connections: 0, down: false })
-                .collect(),
-        }));
-        if all_done {
+        let live = matches!(s.state, TorrentStatsState::Live);
+        let now_seen = (s.progress_bytes, s.live.as_ref().map(|l| l.snapshot.fetched_bytes).unwrap_or(0));
+        if now_seen != seen || !live {
+            if live && now_seen.0 > seen.0 {
+                stall_after = STALL_FIRST; // pieces are arriving again
+            }
+            seen = now_seen;
+            quiet_since = Instant::now();
+        }
+        let mut rebuild = live && !s.finished && quiet_since.elapsed() >= stall_after;
+        if rebuild {
+            stall_after = (stall_after * 2).min(STALL_MAX);
+        }
+        // Follow the links: one that vanished takes no new peers, one that came back (after sleep) or is new is used.
+        if let (Some(sp), Some(watch)) = (&spread, &opts.link_watch) {
+            if last_watch.elapsed() >= opts.watch_interval {
+                last_watch = Instant::now();
+                let w = watch.clone();
+                if let Ok(desired) = tokio::task::spawn_blocking(move || w()).await {
+                    // Back online, or on other links: the peers tried meanwhile all failed, so start over with them.
+                    if sp.set_routes(&desired) && !desired.is_empty() {
+                        rebuild = live && !s.finished;
+                    }
+                }
+            }
+        }
+        if rebuild {
+            // Pausing drops every peer with its backoff; resuming announces to trackers and DHT afresh. The pieces
+            // already on disk are kept as they are, nothing is checked again.
+            let _ = sess.pause(&handle).await;
+            if let Err(e) = sess.unpause(&handle).await {
+                break Err(bt(e));
+            }
+            quiet_since = Instant::now();
+        }
+        let done_bytes: u64 = files.iter().map(|&(f, _)| s.file_progress.get(f).copied().unwrap_or(0)).sum();
+        let speed = s.live.as_ref().map(|l| l.download_speed.mbps * 1024.0 * 1024.0).unwrap_or(0.0);
+        let routes: Vec<RouteStat> = match &spread {
+            None => {
+                vec![RouteStat { name: opts.routes[0].name.clone(), bytes: done_bytes, bytes_per_sec: speed, connections: 0, down: false }]
+            }
+            Some(sp) => {
+                let usage = sp.usage();
+                let now = Instant::now();
+                let bytes: Vec<u64> = usage.iter().map(|u| u.bytes).collect();
+                rates.resize(usage.len(), 0.0);
+                if let Some((t, prev)) = &last {
+                    let dt = now.duration_since(*t).as_secs_f64().max(0.05);
+                    for (k, r) in rates.iter_mut().enumerate() {
+                        // A link that joined since the last look has no earlier reading.
+                        let inst = bytes[k].saturating_sub(prev.get(k).copied().unwrap_or(bytes[k])) as f64 / dt;
+                        *r = 0.7 * *r + 0.3 * inst;
+                    }
+                }
+                last = Some((now, bytes));
+                usage
+                    .into_iter()
+                    .zip(&rates)
+                    .map(|(u, &v)| RouteStat {
+                        name: u.name,
+                        bytes: u.bytes,
+                        bytes_per_sec: v,
+                        connections: u.connections,
+                        down: u.down,
+                    })
+                    .collect()
+            }
+        };
+        let busiest = (0..routes.len()).max_by_key(|&k| routes[k].bytes).unwrap_or(0);
+        for &(f, len) in &files {
+            if !announced[f] && s.file_progress.get(f).copied().unwrap_or(0) >= len {
+                announced[f] = true;
+                emit(Event::ChunkDone { idx: f, route: busiest });
+            }
+        }
+        emit(Event::Progress(Snapshot { downloaded: done_bytes.min(total), total: Some(total), bytes_per_sec: speed, routes }));
+        if s.finished {
             break Ok(());
         }
         tokio::select! {
@@ -193,9 +243,8 @@ pub async fn download(opts: &Options, cancel: CancellationToken, emit: Emit) -> 
             _ = tokio::time::sleep(Duration::from_millis(250)) => {}
         }
     };
-    for p in &parts {
-        p.session.stop().await;
-    }
+    sess.stop().await;
+    drop(spread);
     result?;
     Ok(dir.join(&folder))
 }
@@ -221,22 +270,5 @@ mod tests {
     fn reads_the_display_name_of_a_magnet() {
         assert_eq!(magnet_name("magnet:?xt=urn:btih:abc&dn=Linux+ISOs%20Pack").as_deref(), Some("Linux ISOs Pack"));
         assert_eq!(magnet_name("magnet:?xt=urn:btih:abc"), None);
-    }
-
-    #[test]
-    fn partitions_files_by_size_over_links() {
-        let files = vec![(0, 10), (1, 40), (2, 30), (3, 20)];
-        let p = partition(&files, 2);
-        let sum = |v: &Vec<usize>| v.iter().map(|&i| files[i].1).sum::<u64>();
-        // 40 -> link 0, 30 -> link 1, 20 -> link 1 (30 < 40), 10 -> link 0: both links end up with 50 bytes.
-        assert_eq!(p, vec![vec![0, 1], vec![2, 3]]);
-        assert_eq!(sum(&p[0]), sum(&p[1]));
-        // every file is assigned exactly once
-        let mut all: Vec<usize> = p.concat();
-        all.sort();
-        assert_eq!(all, vec![0, 1, 2, 3]);
-        assert_eq!(partition(&files, 1), vec![vec![0, 1, 2, 3]]);
-        let few = partition(&[(0, 5)], 3);
-        assert_eq!(few, vec![vec![0], vec![], vec![]], "more links than files: the extra links stay idle");
     }
 }
