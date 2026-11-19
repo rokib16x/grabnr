@@ -53,6 +53,8 @@ function reduce(s: State, a: Action): State {
 }
 
 
+const LINK_REFRESH_MS = 5000;
+
 /** Downloads, live progress and settings, kept in sync with the backend. Shared by the main window and the menu bar popover. */
 export function useDownloads() {
   const [state, dispatch] = useReducer(reduce, { items: [], live: {} });
@@ -68,17 +70,29 @@ export function useDownloads() {
       setAfterAll(s.after_all);
       dispatch({ t: "init", items: s.downloads });
     });
-    api.links().then((r) => {
-      registerLinks(r.links);
-      setLinks(r.links);
-    });
-    return subscribe({
+    // Links come and go (Wi-Fi joins after wake, a cable is plugged in) while the window stays open, so keep asking.
+    let seen = "";
+    const refreshLinks = () =>
+      api.links().then((r) => {
+        const key = JSON.stringify(r.links);
+        if (key === seen) return;
+        seen = key;
+        registerLinks(r.links);
+        setLinks(r.links);
+      }, () => {});
+    refreshLinks();
+    const timer = setInterval(refreshLinks, LINK_REFRESH_MS);
+    const unsubscribe = subscribe({
       item: (item) => dispatch({ t: "item", item }),
       removed: (id) => dispatch({ t: "removed", id }),
       event: (id, e) => dispatch({ t: "event", id, e }),
       schedule: setSchedule,
       afterAll: setAfterAll,
     });
+    return () => {
+      clearInterval(timer);
+      unsubscribe();
+    };
   }, []);
 
   const active = state.items.filter((i) => i.status === "downloading");

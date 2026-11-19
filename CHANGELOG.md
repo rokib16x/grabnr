@@ -14,6 +14,7 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 - **Downloads:** a short network outage no longer fails the download. Failed pieces go to the back of the queue instead of being retried by every connection at once, network errors count against a piece only while other pieces are arriving, and with no network at all grabnr waits for it to come back.
 - **Downloads:** a server that throttled a link (HTTP 429/503) gets connections back a minute after it stops, instead of leaving the link on one connection for the rest of the download.
 - **Downloads:** a connection that died during sleep can no longer hang the first request or a single-stream download forever.
+- **Window:** the Connections list and the link count now pick up links that join or leave while the window is open (Wi-Fi coming back after wake), instead of showing only the links present when it opened.
 - **Downloads:** automatic retries start over after a run that made progress, so a long download is not marked failed because of drops hours apart.
 
 ## [0.1.4] - 2026-11-14
