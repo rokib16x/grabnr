@@ -11,8 +11,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use librqbit::{
-    AddTorrent, AddTorrentOptions, AddTorrentResponse, ConnectionOptions, DhtSessionConfig, PeerConnectionOptions, Session,
-    SessionOptions, TorrentStatsState,
+    AddTorrent, AddTorrentOptions, AddTorrentResponse, ConnectionOptions, DhtSessionConfig, PeerConnectionOptions, Session, SessionOptions,
+    TorrentStatsState,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -68,8 +68,11 @@ async fn session(dir: &std::path::Path, via: &Via, opts: &Options) -> Result<Arc
         ipv4_only: true,
         ..Default::default()
     };
-    let peer_opts =
-        Some(PeerConnectionOptions { connect_timeout: None, read_write_timeout: Some(PEER_TIMEOUT), keep_alive_interval: Some(KEEP_ALIVE) });
+    let peer_opts = Some(PeerConnectionOptions {
+        connect_timeout: None,
+        read_write_timeout: Some(PEER_TIMEOUT),
+        keep_alive_interval: Some(KEEP_ALIVE),
+    });
     let proxy_url = match via {
         Via::Device(d) => {
             so.bind_device_name = d.clone();
@@ -217,13 +220,7 @@ pub async fn download(opts: &Options, cancel: CancellationToken, emit: Emit) -> 
                 usage
                     .into_iter()
                     .zip(&rates)
-                    .map(|(u, &v)| RouteStat {
-                        name: u.name,
-                        bytes: u.bytes,
-                        bytes_per_sec: v,
-                        connections: u.connections,
-                        down: u.down,
-                    })
+                    .map(|(u, &v)| RouteStat { name: u.name, bytes: u.bytes, bytes_per_sec: v, connections: u.connections, down: u.down })
                     .collect()
             }
         };

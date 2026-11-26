@@ -49,7 +49,16 @@ impl Hold {
         #[cfg(not(target_os = "macos"))]
         let mut cmd = {
             let mut c = std::process::Command::new("systemd-inhibit");
-            c.args(["--what=idle:sleep", "--who=grabnr", "--why=Downloading", "--mode=block", "tail", &format!("--pid={pid}"), "-f", "/dev/null"]);
+            c.args([
+                "--what=idle:sleep",
+                "--who=grabnr",
+                "--why=Downloading",
+                "--mode=block",
+                "tail",
+                &format!("--pid={pid}"),
+                "-f",
+                "/dev/null",
+            ]);
             c
         };
         cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());

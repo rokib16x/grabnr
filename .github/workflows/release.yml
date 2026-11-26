@@ -19,8 +19,11 @@ jobs:
         include:
           - { name: "macOS Apple silicon", os: macos-latest, target: aarch64-apple-darwin, args: "--target aarch64-apple-darwin" }
           - { name: "macOS Intel", os: macos-latest, target: x86_64-apple-darwin, args: "--target x86_64-apple-darwin" }
-          - { name: "Linux", os: ubuntu-24.04, target: "", args: "" }
-          - { name: "Windows", os: windows-latest, target: "", args: "" }
+          - { name: "Linux x64", os: ubuntu-24.04, target: "", args: "" }
+          - { name: "Linux Arm", os: ubuntu-24.04-arm, target: "", args: "" }
+          - { name: "Windows x64", os: windows-latest, target: "", args: "" }
+          # MSI (WiX) cannot target Arm, so Windows on Arm gets the NSIS installer only.
+          - { name: "Windows Arm", os: windows-latest, target: aarch64-pc-windows-msvc, args: "--target aarch64-pc-windows-msvc --bundles nsis" }
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -37,7 +40,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev patchelf
       - run: npm ci
-      # Optional: with the MACOS_* and NOTARY_* repository secrets (same names as the hidnr repo) the macOS app is signed
+      # Optional: with the MACOS_* and NOTARY_* repository secrets the macOS app is signed
       # and notarized. Without them the build is unsigned. The certificate lives in a keychain that exists only for this job.
       - name: Apple signing
         if: ${{ startsWith(matrix.os, 'macos') }}
@@ -94,7 +97,7 @@ jobs:
           args: ${{ matrix.args }} ${{ env.HAS_UPDATER_KEY == 'true' && '--config src-tauri/tauri.updater.conf.json' || '' }}
 
   cli:
-    name: CLI (${{ matrix.os }})
+    name: CLI (${{ matrix.asset }})
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
@@ -102,24 +105,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
-            asset: grabnr-macos-arm64.tar.gz
-            bin: grabnr
-          - os: ubuntu-latest
-            asset: grabnr-linux-x86_64.tar.gz
-            bin: grabnr
-          - os: windows-latest
-            asset: grabnr-windows-x86_64.zip
-            bin: grabnr.exe
+          - { os: macos-latest, target: aarch64-apple-darwin, asset: grabnr-macos-arm64.tar.gz, bin: grabnr }
+          - { os: macos-latest, target: x86_64-apple-darwin, asset: grabnr-macos-x86_64.tar.gz, bin: grabnr }
+          - { os: ubuntu-24.04, target: x86_64-unknown-linux-gnu, asset: grabnr-linux-x86_64.tar.gz, bin: grabnr }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, asset: grabnr-linux-arm64.tar.gz, bin: grabnr }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, asset: grabnr-windows-x86_64.zip, bin: grabnr.exe }
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build -p grabnr-cli --release
+        with:
+          key: ${{ matrix.target }}
+      - run: cargo build -p grabnr-cli --release --target ${{ matrix.target }}
       - name: Package
         shell: bash
         run: |
-          mkdir dist-cli && cp "target/release/${{ matrix.bin }}" dist-cli/
+          mkdir dist-cli && cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" dist-cli/
           cd dist-cli
           if [[ "${{ matrix.asset }}" == *.zip ]]; then 7z a "../${{ matrix.asset }}" "${{ matrix.bin }}"; else tar czf "../${{ matrix.asset }}" "${{ matrix.bin }}"; fi
       - name: Keep as an artifact (dry run)

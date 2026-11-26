@@ -17,8 +17,10 @@ Download the latest release from the [Releases page](https://github.com/rokib16x
 | | File |
 |---|---|
 | macOS (Apple Silicon / Intel) | `grabnr_<version>_aarch64.dmg` / `grabnr_<version>_x64.dmg` |
-| Windows | `grabnr_<version>_x64-setup.exe` or `.msi` |
-| Linux | `.AppImage`, `.deb` or `.rpm` |
+| Windows (x64) | `grabnr_<version>_x64-setup.exe` or `.msi` |
+| Windows on Arm | `grabnr_<version>_arm64-setup.exe` |
+| Linux (x64 / Arm) | `.AppImage`, `.deb` or `.rpm` (`amd64`/`x86_64` or `arm64`/`aarch64` in the name) |
+| Command line only | `grabnr-macos-arm64.tar.gz`, `grabnr-macos-x86_64.tar.gz`, `grabnr-linux-x86_64.tar.gz`, `grabnr-linux-arm64.tar.gz`, `grabnr-windows-x86_64.zip` |
 | Browser extension | `grabnr-chrome.zip` (Chrome, Brave, Edge) or `grabnr-firefox.zip` |
 
 macOS releases are signed with a Developer ID and notarized by Apple, and the app updates itself from Preferences.
@@ -48,7 +50,7 @@ macOS releases are signed with a Developer ID and notarized by Apple, and the ap
 Built and tested (see [FEATURES.md](FEATURES.md) for the full list):
 - **Engine:** shared chunk queue over every link, tail racing, adaptive connections per link, resume across restarts, retries with backoff, throttle handling, mirrors and Metalink, checksums, speed limits, proxies and sign-in, links that join or leave mid-download, recovery from stalled connections.
 - **App:** macOS-style window with a sidebar, categories, inspector, chunk map and per-link speed graph; menu bar popover; history and statistics; onboarding; command palette; Dock progress.
-- **Protocols:** HTTP/HTTPS, FTP and SFTP split over every link; HLS video-on-demand with a quality choice; BitTorrent and magnet links (download only). On `main`, torrent peers are spread over all your links; this lands in the next release after 0.1.3.
+- **Protocols:** HTTP/HTTPS, FTP and SFTP split over every link; HLS video-on-demand with a quality choice; BitTorrent and magnet links (download only). Torrent peers are spread over all your links, even for a single file.
 - **Queue:** concurrent download limit, priorities, time-of-day schedule, shared and per-link speed limits.
 - **Browser extension** for Chrome, Brave, Edge and Firefox. Safari: context menu only (Safari has no downloads API).
 - **Releases:** signed and notarized macOS builds with auto-update; Windows and Linux installers.
@@ -59,7 +61,7 @@ Not done yet: live HLS streams and DASH, torrent seeding, IPv6 binding, resuming
 
 **This is the one thing not yet proven on real hardware:** that bandwidth adds up across two links with different gateways. The engine is tested against a local range server and the interface binding is checked by `grabnr spike`, but nobody has yet measured the speed-up on two physical connections from different ISPs.
 
-If you have two connections (say home broadband plus a phone hotspot), you can help. The `grabnr` CLI is in the `grabnr-macos-arm64.tar.gz`, `grabnr-linux-x86_64.tar.gz` and `grabnr-windows-x86_64.zip` release files:
+If you have two connections (say home broadband plus a phone hotspot), you can help. The `grabnr` CLI is in the `grabnr-<os>-<arch>.tar.gz` / `.zip` release files (see Install):
 
 ```bash
 grabnr spike --secs 8

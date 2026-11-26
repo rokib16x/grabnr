@@ -32,3 +32,9 @@ playwright-report
 
 # Extension build output
 extension/dist
+
+# Local tooling
+.claude/
+
+# Local brand explorations
+assets/brand/concepts/

@@ -437,7 +437,10 @@ mod tests {
             keep.push(socks_connect(spread.addr, echo).await);
         }
         let usage = spread.usage();
-        assert_eq!(usage.iter().map(|u| (u.name.as_str(), u.connections, u.down)).collect::<Vec<_>>(), vec![("a", 0, true), ("b", 3, false)]);
+        assert_eq!(
+            usage.iter().map(|u| (u.name.as_str(), u.connections, u.down)).collect::<Vec<_>>(),
+            vec![("a", 0, true), ("b", 3, false)]
+        );
 
         assert!(spread.set_routes(&[Route::unbound("a"), Route::unbound("b"), Route::unbound("c")]), "a is back, c is new");
         keep.push(socks_connect(spread.addr, echo).await);

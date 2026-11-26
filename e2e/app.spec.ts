@@ -170,7 +170,7 @@ test("a magnet link is added and named by its display name", async ({ page }) =>
   await open(page);
   await page.getByRole("button", { name: "Add download" }).click();
   await page.getByLabel("Links").fill("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=Open+Source+Pack");
-  await expect(page.getByText("Torrents are split by file")).toBeVisible();
+  await expect(page.getByText("Torrent peers are spread over your connections")).toBeVisible();
   await page.getByRole("button", { name: "Add Download", exact: true }).last().click();
   await expect(row(page, "Open Source Pack")).toBeVisible();
 });

@@ -4,8 +4,8 @@
 
 Pushing a tag such as `v0.2.0` runs `.github/workflows/release.yml`, which builds
 
-- the desktop app for macOS (Apple silicon and Intel), Linux and Windows,
-- the `grabnr` command line tool for macOS, Linux and Windows,
+- the desktop app for macOS (Apple silicon and Intel), Linux (x64 and Arm: `.deb`, `.rpm`, `.AppImage`) and Windows (x64: `.exe` and `.msi`; Arm: `.exe`),
+- the `grabnr` command line tool for macOS (Apple silicon and Intel), Linux (x64 and Arm) and Windows,
 - the Chrome/Brave/Edge and Firefox extension zips,
 
 and attaches them to a **draft** release. Nothing is public until you publish the draft.
@@ -31,7 +31,7 @@ None are required to build. Each one below unlocks one thing.
 | `MACOS_APP_CERT_P12`, `MACOS_CERT_PASSWORD`, `MACOS_KEYCHAIN_PASSWORD` | Signing the macOS app with your Developer ID Application certificate (a base64 `.p12`; the keychain password is any random string). |
 | `NOTARY_KEY_ID`, `NOTARY_ISSUER_ID`, `NOTARY_KEY_P8` | Notarization with an App Store Connect API key (the `.p8`, base64). |
 
-These are the same names the hidnr repository uses. GitHub never shows secret values back, so they are set once per repository.
+GitHub never shows secret values back, so they are set once per repository.
 
 ### Update signing key
 
