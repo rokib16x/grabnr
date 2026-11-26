@@ -8,6 +8,30 @@ so faster links take more chunks.
 
 Built with Tauri 2 and Rust (small installer, low memory). Developed on macOS; Linux and Windows builds are produced too (see Platforms).
 
+<p align="center"><img src="site/assets/app-dark.png" alt="grabnr downloading one file over Wi-Fi, Ethernet and an iPhone hotspot at once, with the chunk map coloured by link" width="860"></p>
+
+## Install
+
+Download the latest release from the [Releases page](https://github.com/rokib16x/grabnr/releases/latest) or the [website](https://rokib16x.github.io/grabnr/):
+
+| | File |
+|---|---|
+| macOS (Apple Silicon / Intel) | `grabnr_<version>_aarch64.dmg` / `grabnr_<version>_x64.dmg` |
+| Windows | `grabnr_<version>_x64-setup.exe` or `.msi` |
+| Linux | `.AppImage`, `.deb` or `.rpm` |
+| Browser extension | `grabnr-chrome.zip` (Chrome, Brave, Edge) or `grabnr-firefox.zip` |
+
+macOS releases are signed with a Developer ID and notarized by Apple, and the app updates itself from Preferences.
+
+## How it works
+
+1. grabnr finds every usable link (Wi-Fi, Ethernet, USB or phone tethering) and skips VPN tunnels.
+2. The file is split into 1-8 MB chunks in one shared queue.
+3. Each link gets its own connections, bound to that interface (`IP_BOUND_IF` on macOS), so traffic really leaves through it instead of the default route.
+4. Every connection takes the next chunk as soon as it finishes the last one. Nobody assigns the work: a faster link comes back sooner, so it ends up taking more.
+5. Near the end, the slowest chunk is fetched again on a faster link (tail racing) and the first copy wins, so one slow link cannot hold up the whole file.
+6. Links can join or leave mid-download (Wi-Fi after sleep, a cable plugged in), and a server that throttles a link with 429/503 gets that link backed off, not the whole download.
+
 ## Layout
 
 | Path | What |
@@ -16,7 +40,7 @@ Built with Tauri 2 and Rust (small installer, low memory). Developed on macOS; L
 | `crates/grabnr-cli` | `grabnr` CLI built on the same engine |
 | `src-tauri` | Tauri app: download manager, queue, local API for the browser extension |
 | `src` | React + TypeScript UI (download list, chunk grid, per-link speed graph, settings) |
-| `extension` | Chrome/Brave/Edge extension that hands browser downloads to the app |
+| `extension` | Chrome/Brave/Edge and Firefox extension that hands browser downloads to the app |
 | `FEATURES.md` | Full feature list |
 
 ## Status
@@ -24,15 +48,28 @@ Built with Tauri 2 and Rust (small installer, low memory). Developed on macOS; L
 Built and tested (see [FEATURES.md](FEATURES.md) for the full list):
 - **Engine:** shared chunk queue over every link, tail racing, adaptive connections per link, resume across restarts, retries with backoff, throttle handling, mirrors and Metalink, checksums, speed limits, proxies and sign-in, links that join or leave mid-download, recovery from stalled connections.
 - **App:** macOS-style window with a sidebar, categories, inspector, chunk map and per-link speed graph; menu bar popover; history and statistics; onboarding; command palette; Dock progress.
-- **Browser extension** for Chrome, Brave and Edge.
+- **Protocols:** HTTP/HTTPS, FTP and SFTP split over every link; HLS video-on-demand with a quality choice; BitTorrent and magnet links (download only). On `main`, torrent peers are spread over all your links; this lands in the next release after 0.1.3.
+- **Queue:** concurrent download limit, priorities, time-of-day schedule, shared and per-link speed limits.
+- **Browser extension** for Chrome, Brave, Edge and Firefox. Safari: context menu only (Safari has no downloads API).
+- **Releases:** signed and notarized macOS builds with auto-update; Windows and Linux installers.
 
-Not done yet: FTP/SFTP, torrents, HLS, the scheduler, Safari and Firefox extensions, signed builds and auto-update, Windows and Linux apps.
+Not done yet: live HLS streams and DASH, torrent seeding, IPv6 binding, resuming from servers without range support, a Share Sheet extension.
 
-**Not yet proven on real hardware:** that traffic splits across two links with different gateways. The engine is tested against a local range server and the interface binding is checked by `grabnr spike`, but nobody has yet measured the speed-up on two physical connections.
+## Help test the speed-up
 
-## Opening an unsigned build
+**This is the one thing not yet proven on real hardware:** that bandwidth adds up across two links with different gateways. The engine is tested against a local range server and the interface binding is checked by `grabnr spike`, but nobody has yet measured the speed-up on two physical connections from different ISPs.
 
-Until releases are signed with an Apple Developer ID, macOS refuses to open the app the first time. Control-click it, choose
+If you have two connections (say home broadband plus a phone hotspot), you can help. The `grabnr` CLI is in the `grabnr-macos-arm64.tar.gz`, `grabnr-linux-x86_64.tar.gz` and `grabnr-windows-x86_64.zip` release files:
+
+```bash
+grabnr spike --secs 8
+```
+
+Then download one large file with only one link enabled, and again with both, and [open an issue](https://github.com/rokib16x/grabnr/issues/new) with the `spike` output and both times. `Bound` in the spike output means traffic really left through that link; `SameEgress` means the same ISP, or the OS ignored the binding.
+
+## Building it yourself
+
+A build you make yourself is not signed, so macOS refuses to open it the first time. Control-click it, choose
 **Open**, then **Open** again (details in [docs/RELEASING.md](docs/RELEASING.md)).
 
 ## Platforms
