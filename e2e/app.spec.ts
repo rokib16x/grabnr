@@ -96,6 +96,7 @@ test("the command palette finds actions and downloads", async ({ page }) => {
 test("a schedule rule can be added, edited and removed", async ({ page }) => {
   await open(page);
   await page.getByRole("button", { name: "Manage Connections" }).click();
+  await page.locator(".nav-item", { hasText: "Schedule" }).click();
   await page.getByRole("button", { name: "Add rule" }).click();
   const rule = page.locator(".rule").first();
   await expect(rule).toBeVisible();
@@ -120,8 +121,7 @@ test("a stopped download can be pointed at a new link", async ({ page }) => {
 
 test("queue order can be changed by dragging", async ({ page }) => {
   await open(page);
-  await page.getByRole("button", { name: "More" }).first().click();
-  await page.getByRole("menuitem", { name: /Queue order/ }).click();
+  await page.getByRole("toolbar", { name: "Sort by" }).getByRole("button", { name: "Queue" }).click();
   const names = async () => page.locator("li.row .name").allTextContents();
   const before = await names();
   const from = before.indexOf("Beautiful Nature 4K.mp4");
