@@ -12,7 +12,8 @@
     "test:extension": "node extension/test/harness.mjs && node extension/test/build.mjs",
     "check": "tsc --noEmit && vitest run && npm run test:extension",
     "e2e": "playwright test",
-    "build:extension": "node extension/tools/build.mjs"
+    "build:extension": "node extension/tools/build.mjs",
+    "sign:firefox": "npm run build:extension && npx --yes web-ext@8 sign --source-dir extension/dist/firefox --artifacts-dir extension/dist/signed --channel unlisted"
   },
   "dependencies": {
     "@fontsource-variable/jetbrains-mono": "^5.3.0",

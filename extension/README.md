@@ -24,6 +24,21 @@ npm run build:extension      # writes extension/dist/grabnr-firefox.zip (and the
    install its own random address, so unlike Chrome it cannot be recognised automatically and needs this
    one-time pairing.
 
+### Permanent Firefox install (signed, unlisted)
+
+Regular Firefox only keeps add-ons that Mozilla has signed. Signing an unlisted add-on is free and automatic:
+
+1. Create API keys at https://addons.mozilla.org/developers/addon/api/key/ (needs a Mozilla account).
+2. Run, with your own keys:
+
+   ```bash
+   WEB_EXT_API_KEY=<JWT issuer> WEB_EXT_API_SECRET=<JWT secret> npm run sign:firefox
+   ```
+
+3. Open the signed file in `extension/dist/signed/` (`*.xpi`) with Firefox, or drag it onto a Firefox window.
+   Pair it once as described above. Bump `version` in `manifest.json` before signing again: Mozilla rejects
+   a version it has already signed.
+
 ## Connecting
 
 Nothing to pair. The manifest pins a public key, so this extension always has the ID

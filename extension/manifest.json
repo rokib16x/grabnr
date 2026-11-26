@@ -41,7 +41,7 @@
   },
   "browser_specific_settings": {
     "gecko": {
-      "id": "grabnr@grabnr.invalid",
+      "id": "grabnr@grabnr.local",
       "strict_min_version": "121.0"
     }
   }

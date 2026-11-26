@@ -1,8 +1,9 @@
+import { useState } from "react";
 import { api } from "./api";
 import { FileIcon } from "./FileIcon";
 import { bytes, eta, fileName, linkColor, rate } from "./format";
 import { Icon } from "./icons";
-import { MoreMenu } from "./Menu";
+import { ContextMenu, MoreMenu, type MenuEntry } from "./Menu";
 import type { Item, Live } from "./types";
 import { FILE_MANAGER } from "./platform";
 import { t } from "./i18n";
@@ -52,13 +53,24 @@ export function PlayPause({ item }: { item: Item }) {
 
 export type DragProps = { onDragStart: () => void; onDragOver: () => void; onDrop: () => void; onDragEnd: () => void; over: boolean };
 
-export function DownloadRow({ item, live, selected, onSelect, drag, onChangeLink }: { item: Item; live?: Live; selected: boolean; onSelect: () => void; drag?: DragProps; onChangeLink?: (i: Item) => void }) {
+export function DownloadRow({ item, live, selected, onSelect, drag, onChangeLink }: { item: Item; live?: Live; selected: boolean; onSelect: (e: React.MouseEvent) => void; drag?: DragProps; onChangeLink?: (i: Item) => void }) {
   const { downloaded, pct, speed } = progressOf(item, live);
   const name = fileName(item.url, item.filename);
+  const [ctx, setCtx] = useState<{ x: number; y: number } | null>(null);
+  const entries: MenuEntry[] = [
+    ...(item.status === "done" ? [{ label: t("Open"), onClick: () => api.open(item.id) }, { label: FILE_MANAGER === "Finder" ? t("Show in Finder") : t("Show in folder"), onClick: () => api.reveal(item.id) }] : []),
+    ...(item.status === "queued" || item.status === "paused" ? [{ label: t("Download next"), onClick: () => api.move(item.id, true) }, { label: t("Download last"), onClick: () => api.move(item.id, false) }] : []),
+    ...(onChangeLink && (item.status === "paused" || item.status === "error" || item.status === "queued") ? [{ label: t("Change link…"), onClick: () => onChangeLink(item) }] : []),
+    { label: t("Copy link"), onClick: () => void navigator.clipboard?.writeText(item.url) },
+    "sep",
+    { label: t("Remove from list"), onClick: () => api.remove(item.id, false) },
+    ...(item.status !== "done" ? [{ label: t("Cancel and delete partial file"), danger: true, onClick: () => api.remove(item.id, true) }] : []),
+  ];
   return (
     <li
       className={`row ${item.status}${selected ? " selected" : ""}${drag?.over ? " drop-target" : ""}`}
       onClick={onSelect}
+      onContextMenu={(e) => { e.preventDefault(); setCtx({ x: e.clientX, y: e.clientY }); }}
       onDoubleClick={() => item.status === "done" && api.open(item.id)}
       draggable={!!drag}
       onDragStart={(e) => { if (drag) { e.dataTransfer.setData("application/x-grabnr-row", item.id); e.dataTransfer.effectAllowed = "move"; drag.onDragStart(); } }}
@@ -76,19 +88,11 @@ export function DownloadRow({ item, live, selected, onSelect, drag, onChangeLink
         <ProgressBar item={item} live={live} />
       </div>
       <div className="row-actions">
+        {item.status === "done" && <button className="round quick" aria-label={FILE_MANAGER === "Finder" ? t("Show in Finder") : t("Show in folder")} title={FILE_MANAGER === "Finder" ? t("Show in Finder") : t("Show in folder")} onClick={(e) => { e.stopPropagation(); api.reveal(item.id); }}><Icon name="folder" /></button>}
         <PlayPause item={item} />
-        <MoreMenu
-          items={[
-            ...(item.status === "done" ? [{ label: t("Open"), onClick: () => api.open(item.id) }, { label: FILE_MANAGER === "Finder" ? t("Show in Finder") : t("Show in folder"), onClick: () => api.reveal(item.id) }] : []),
-            ...(item.status === "queued" || item.status === "paused" ? [{ label: t("Download next"), onClick: () => api.move(item.id, true) }, { label: t("Download last"), onClick: () => api.move(item.id, false) }] : []),
-            ...(onChangeLink && (item.status === "paused" || item.status === "error" || item.status === "queued") ? [{ label: t("Change link…"), onClick: () => onChangeLink(item) }] : []),
-            { label: t("Copy link"), onClick: () => void navigator.clipboard?.writeText(item.url) },
-            "sep",
-            { label: t("Remove from list"), onClick: () => api.remove(item.id, false) },
-            ...(item.status !== "done" ? [{ label: t("Cancel and delete partial file"), danger: true, onClick: () => api.remove(item.id, true) }] : []),
-          ]}
-        />
+        <MoreMenu items={entries} />
       </div>
+      {ctx && <ContextMenu x={ctx.x} y={ctx.y} items={entries} onClose={() => setCtx(null)} />}
     </li>
   );
 }

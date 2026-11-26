@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, onOpenSettings, onPendingAdd } from "./api";
 import { AddDialog } from "./AddDialog";
 import { CommandPalette, type Command } from "./CommandPalette";
@@ -17,26 +17,28 @@ import type { AfterAll, Item, Live, PendingAdd, Settings } from "./types";
 import { MOD } from "./platform";
 import { msg, t, tn } from "./i18n";
 
-type Sort = "queue" | "newest" | "oldest" | "name" | "size" | "progress";
-const SORTS: { id: Sort; label: string }[] = [
-  { id: "queue", label: msg("Queue order (drag to reorder)") },
-  { id: "newest", label: msg("Newest first") },
-  { id: "oldest", label: msg("Oldest first") },
-  { id: "name", label: msg("Name") },
-  { id: "size", label: msg("Size") },
-  { id: "progress", label: msg("Progress") },
+type Sort = "queue" | "added" | "name" | "size" | "progress";
+type Dir = "asc" | "desc";
+const SORTS: { id: Sort; label: string; hint: string }[] = [
+  { id: "queue", label: msg("Queue"), hint: msg("Queue order (drag to reorder)") },
+  { id: "added", label: msg("Date added"), hint: msg("Date added") },
+  { id: "name", label: msg("Name"), hint: msg("Name") },
+  { id: "size", label: msg("Size"), hint: msg("Size") },
+  { id: "progress", label: msg("Progress"), hint: msg("Progress") },
 ];
+/** The direction a column starts in when first picked: biggest and newest first, names A to Z. */
+const FIRST_DIR: Record<Sort, Dir> = { queue: "asc", added: "desc", name: "asc", size: "desc", progress: "desc" };
 
-function sorter(sort: Sort, live: Record<string, Live>, order: Map<string, number>) {
+function sorter(sort: Sort, dir: Dir, live: Record<string, Live>, order: Map<string, number>) {
   const name = (i: Item) => fileName(i.url, i.filename).toLowerCase();
   const pct = (i: Item) => progressOf(i, live[i.id]).pct;
+  const sign = dir === "asc" ? 1 : -1;
   switch (sort) {
     case "queue": return (a: Item, b: Item) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0);
-    case "oldest": return (a: Item, b: Item) => a.added - b.added;
-    case "name": return (a: Item, b: Item) => name(a).localeCompare(name(b));
-    case "size": return (a: Item, b: Item) => (b.total ?? 0) - (a.total ?? 0);
-    case "progress": return (a: Item, b: Item) => pct(b) - pct(a);
-    default: return (a: Item, b: Item) => b.added - a.added;
+    case "name": return (a: Item, b: Item) => sign * name(a).localeCompare(name(b));
+    case "size": return (a: Item, b: Item) => sign * ((a.total ?? 0) - (b.total ?? 0));
+    case "progress": return (a: Item, b: Item) => sign * (pct(a) - pct(b));
+    default: return (a: Item, b: Item) => sign * (a.added - b.added);
   }
 }
 
@@ -84,7 +86,12 @@ async function urlsFromDrop(dt: DataTransfer): Promise<string> {
 export function MainWindow() {
   const d = useDownloads();
   const [filter, setFilter] = useState<Filter>("all");
-  const [sort, setSort] = useState<Sort>(() => remembered("grabnr.sort", "newest", SORTS.map((s) => s.id)));
+  const [sort, setSort] = useState<Sort>(() => remembered("grabnr.sort", "added", SORTS.map((s) => s.id)));
+  const [dir, setDir] = useState<Dir>(() => remembered("grabnr.sortdir", FIRST_DIR[remembered("grabnr.sort", "added", SORTS.map((s) => s.id))], ["asc", "desc"]));
+  const [dense, setDense] = useState(() => remembered("grabnr.density", "comfortable", ["comfortable", "compact"]) === "compact");
+  const [collapsed, setCollapsed] = useState(() => remembered("grabnr.sidebar", "open", ["open", "collapsed"]) === "collapsed");
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [anchor, setAnchor] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -107,7 +114,18 @@ export function MainWindow() {
   useEffect(() => onOpenSettings(() => setSettingsOpen(true)), []);
   // Preferences were requested (from the menu bar) while this window was still being created.
   useEffect(() => void api.takeOpenSettings().then((v) => v && setSettingsOpen(true)).catch(() => {}), []);
-  useEffect(() => { try { localStorage.setItem("grabnr.sort", sort); } catch { /* storage may be unavailable */ } }, [sort]);
+  useEffect(() => {
+    try {
+      localStorage.setItem("grabnr.sort", sort);
+      localStorage.setItem("grabnr.sortdir", dir);
+      localStorage.setItem("grabnr.density", dense ? "compact" : "comfortable");
+      localStorage.setItem("grabnr.sidebar", collapsed ? "collapsed" : "open");
+    } catch { /* storage may be unavailable */ }
+  }, [sort, dir, dense, collapsed]);
+  const pickSort = (id: Sort) => {
+    if (id === sort && id !== "queue") setDir(dir === "asc" ? "desc" : "asc");
+    else { setSort(id); setDir(FIRST_DIR[id]); }
+  };
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(null), 3500);
@@ -137,6 +155,7 @@ export function MainWindow() {
       if (k === "n") { e.preventDefault(); setAdding(true); }
       if (k === ",") { e.preventDefault(); setSettingsOpen(true); }
       if (k === "k") { e.preventDefault(); setPalette((p) => !p); }
+      if (k === "b") { e.preventDefault(); setCollapsed((c) => !c); }
     };
     let depth = 0;
     const hasPayload = (e: DragEvent) => !!e.dataTransfer && (e.dataTransfer.types.includes("Files") || e.dataTransfer.types.includes("text/uri-list") || e.dataTransfer.types.includes("text/plain"));
@@ -171,9 +190,24 @@ export function MainWindow() {
     const order = new Map([...d.items].reverse().sort((a, b) => b.priority - a.priority).map((i, n) => [i.id, n]));
     return d.items
       .filter((i) => matchFilter(filter, i) && (!q || fileName(i.url, i.filename).toLowerCase().includes(q) || i.url.toLowerCase().includes(q)))
-      .sort(sorter(sort, d.live, order));
-  }, [d.items, d.live, filter, query, sort]);
+      .sort(sorter(sort, dir, d.live, order));
+  }, [d.items, d.live, filter, query, sort, dir]);
   const canDrag = sort === "queue" && !query.trim();
+
+  // Several rows at once: shift-click for a range, ⌘/Ctrl-click to add or remove one, ⌘/Ctrl+A for all, Esc to let go.
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") { e.preventDefault(); setPicked(new Set(shownRef.current.map((i) => i.id))); }
+      if (e.key === "Escape") setPicked((p) => (p.size ? new Set() : p));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  useEffect(() => setPicked(new Set()), [filter, query]);
   const dragFor = (i: Item): DragProps | undefined =>
     canDrag && i.status !== "done"
       ? {
@@ -202,6 +236,27 @@ export function MainWindow() {
   const canResume = d.items.some((i) => i.status === "paused");
   const doneCount = d.items.filter((i) => i.status === "done").length;
 
+  const select = (i: Item, e: React.MouseEvent) => {
+    if (e.shiftKey && anchor) {
+      const a = shown.findIndex((x) => x.id === anchor);
+      const b = shown.findIndex((x) => x.id === i.id);
+      if (a >= 0 && b >= 0) { setPicked(new Set(shown.slice(Math.min(a, b), Math.max(a, b) + 1).map((x) => x.id))); setSelected(i.id); return; }
+    }
+    if (e.metaKey || e.ctrlKey) {
+      const next = new Set(picked.size ? picked : current ? [current.id] : []);
+      if (next.has(i.id)) next.delete(i.id); else next.add(i.id);
+      setPicked(next);
+      setAnchor(i.id);
+      setSelected(i.id);
+      return;
+    }
+    setPicked(new Set());
+    setAnchor(i.id);
+    setSelected(i.id);
+  };
+  const pickedItems = d.items.filter((i) => picked.has(i.id));
+  const bulk = (fn: (i: Item) => unknown, only?: (i: Item) => boolean) => { pickedItems.filter(only ?? (() => true)).forEach((i) => void fn(i)); };
+
   const commands: Command[] = useMemo(() => [
     { id: "add", label: t("Add Download…"), hint: `${MOD}N`, icon: "plus", run: () => setAdding(true) },
     { id: "pause", label: t("Pause All"), icon: "pause", run: () => void api.pauseAll() },
@@ -213,8 +268,8 @@ export function MainWindow() {
   ], [d.items]);
 
   return (
-    <div className="app">
-      <Sidebar items={d.items} filter={filter} onFilter={setFilter} links={d.links} linkSpeeds={d.linkSpeeds} settings={d.app?.settings} onManage={() => setSettingsOpen(true)} />
+    <div className={`app${collapsed ? " collapsed" : ""}`}>
+      <Sidebar items={d.items} filter={filter} onFilter={setFilter} links={d.links} linkSpeeds={d.linkSpeeds} settings={d.app?.settings} onManage={() => setSettingsOpen(true)} collapsed={collapsed} onToggle={() => setCollapsed(!collapsed)} />
 
       <section className="main">
         <header data-tauri-drag-region>
@@ -251,8 +306,6 @@ export function MainWindow() {
                 "sep",
                 ...AFTER.map((a) => ({ label: `${d.afterAll === a.id ? "✓ " : "    "}${t("When finished: {what}", { what: a.label })}`, onClick: () => void api.setAfterAll(a.id) })),
                 "sep",
-                ...SORTS.map((s) => ({ label: `${sort === s.id ? "✓ " : "    "}${t("Sort by {how}", { how: t(s.label) })}`, onClick: () => setSort(s.id) })),
-                "sep",
                 { label: t("Preferences…"), onClick: () => setSettingsOpen(true) },
               ]}
             />
@@ -279,12 +332,33 @@ export function MainWindow() {
                   {!d.items.length && <button className="primary" onClick={() => setAdding(true)}>{t("Add Download")}</button>}
                 </div>
               ) : (
-                <ul className="list">
-                  {shown.map((i) => (
-                    <DownloadRow key={i.id} item={i} live={d.live[i.id]} selected={current?.id === i.id} onSelect={() => setSelected(i.id)} drag={dragFor(i)} onChangeLink={setRelink} />
-                  ))}
-                </ul>
+                <>
+                  <div className="list-head" role="toolbar" aria-label={t("Sort by")}>
+                    <span className="lh-label">{t("Sort by")}</span>
+                    {SORTS.map((s) => (
+                      <button key={s.id} className={`sort-pill${sort === s.id ? " on" : ""}`} title={t(s.hint)} aria-pressed={sort === s.id} onClick={() => pickSort(s.id)}>
+                        {t(s.label)}
+                        {sort === s.id && s.id !== "queue" && <Icon name={dir === "asc" ? "arrowup" : "arrowdown"} size={12} />}
+                      </button>
+                    ))}
+                    <button className="ghost density" title={dense ? t("Comfortable view") : t("Compact view")} aria-label={dense ? t("Comfortable view") : t("Compact view")} onClick={() => setDense(!dense)}><Icon name={dense ? "rows" : "list"} size={16} /></button>
+                  </div>
+                  <ul className={`list${dense ? " compact" : ""}`}>
+                    {shown.map((i) => (
+                      <DownloadRow key={i.id} item={i} live={d.live[i.id]} selected={picked.size ? picked.has(i.id) : current?.id === i.id} onSelect={(e) => select(i, e)} drag={dragFor(i)} onChangeLink={setRelink} />
+                    ))}
+                  </ul>
+                </>
               )}
+                {picked.size > 1 && (
+                  <div className="bulk" role="toolbar" aria-label={t("{n} selected", { n: picked.size })}>
+                    <b>{t("{n} selected", { n: picked.size })}</b>
+                    <button onClick={() => bulk((i) => api.resume(i.id), (i) => i.status === "paused" || i.status === "error")}><Icon name="play" size={13} />{t("Resume")}</button>
+                    <button onClick={() => bulk((i) => api.pause(i.id), (i) => i.status === "downloading" || i.status === "queued")}><Icon name="pause" size={13} />{t("Pause")}</button>
+                    <button className="danger" onClick={() => { bulk((i) => api.remove(i.id, false)); setPicked(new Set()); }}><Icon name="trash" size={13} />{t("Remove from list")}</button>
+                    <button className="ghost" onClick={() => setPicked(new Set())}>{t("Clear selection")}</button>
+                  </div>
+                )}
             </main>
             <Inspector item={current} live={current ? d.live[current.id] : undefined} links={d.links} />
           </div>

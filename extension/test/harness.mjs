@@ -24,15 +24,17 @@ globalThis.__GRABNR_BASE_URL = `http://127.0.0.1:${srv.address().port}`;
 
 // ---- chrome stub ----
 const store = { enabled: true, token: TOKEN };
-const calls = { cancel: [], erase: [], notify: [], badge: [] };
+const calls = { cancel: [], erase: [], notify: [], badge: [], order: [] };
+globalThis.__GRABNR_DROP_DELAY_MS = 20;
+const settle = () => new Promise((r) => setTimeout(r, 80));
 const listeners = {};
 const ev = (name) => ({ addListener: (f) => (listeners[name] = f) });
 globalThis.chrome = {
   downloads: {
     onCreated: ev('created'),
     onDeterminingFilename: ev('determining'),
-    cancel: async (id) => calls.cancel.push(id),
-    erase: async (q) => calls.erase.push(q.id),
+    cancel: async (id) => { calls.order.push('cancel'); calls.cancel.push(id); },
+    erase: async (q) => { calls.order.push('erase'); calls.erase.push(q.id); },
   },
   cookies: { getAll: async () => [{ name: 'a', value: 'b' }, { name: 'c', value: 'd' }] },
   storage: {
@@ -52,15 +54,16 @@ Object.defineProperty(globalThis, 'navigator', { value: { userAgent: 'TestUA/1.0
 const { handleDownload } = await import('../background.js');
 
 let nextId = 1;
-const reset = () => { calls.cancel.length = calls.erase.length = calls.notify.length = 0; server.adds.length = 0; };
+const reset = () => { calls.cancel.length = calls.erase.length = calls.notify.length = calls.order.length = 0; server.adds.length = 0; };
 async function run(extra = {}, settings = {}, mode = 'ok') {
   Object.assign(store, { enabled: true, token: TOKEN, skipExtensions: [], skipDomains: [], minSizeMB: 0 }, settings);
   server.mode = mode; reset();
   const item = { id: nextId++, url: 'https://example.com/files/a.zip', referrer: 'https://example.com/', filename: '/home/u/Downloads/a.zip', fileSize: -1, ...extra };
   await handleDownload(item);
+  await settle(); // the browser's copy is dropped a moment after the app accepts it
   return item;
 }
-const captured = () => server.adds.length === 1 && calls.cancel.length === 1 && calls.erase.length === 1;
+const captured = () => server.adds.length === 1 && calls.cancel.length === 1 && calls.erase.length === 0;
 const ignored = () => server.adds.length === 0 && calls.cancel.length === 0 && calls.erase.length === 0;
 
 // (a)+(b) success
@@ -70,14 +73,16 @@ assert.deepEqual(server.adds[0].body, {
   url: 'https://cdn.example.com/a.zip', userAgent: 'TestUA/1.0', referrer: 'https://example.com/',
   filename: 'a.zip', cookies: 'a=b; c=d', ask: true,
 });
-assert.deepEqual(calls.cancel, [item.id]); assert.deepEqual(calls.erase, [item.id]);
-// the browser's own copy is dropped before its Save As panel, and the browser is always answered
+assert.deepEqual(calls.cancel, [item.id]); assert.deepEqual(calls.erase, [], 'never erase: it can crash Brave');
+// the browser's own copy is dropped before its Save As panel, and the browser is always answered.
+// The browser must be answered BEFORE its copy is cancelled/erased: doing it mid-callback crashes Brave.
 {
   reset(); let answered = 0;
-  const r = listeners.determining({ id: nextId++, url: 'https://example.com/b.zip', filename: 'b.zip', fileSize: -1 }, () => answered++);
+  const r = listeners.determining({ id: nextId++, url: 'https://example.com/b.zip', filename: 'b.zip', fileSize: -1 }, () => { calls.order.push('suggest'); answered++; });
   assert.equal(r, true, 'answers asynchronously');
-  await new Promise((r) => setTimeout(r, 50));
+  await settle();
   assert.equal(answered, 1, 'suggest called once'); assert.equal(server.adds.length, 1); assert.equal(calls.cancel.length, 1);
+  assert.deepEqual(calls.order, ['suggest', 'cancel'], 'suggest first, then cancel, and no erase');
 }
 // with "ask first" off, the download starts straight away
 await run({}, { askFirst: false }); assert.equal(server.adds[0].body.ask, false);

@@ -2,6 +2,7 @@ import { CATEGORIES, categoryOf, fileName, linkColor, rate } from "./format";
 import { Icon, linkIcon } from "./icons";
 import type { Item, Link, Settings } from "./types";
 import { msg, t } from "./i18n";
+import { MOD } from "./platform";
 
 /** A status filter, a file category (`cat:video`), or the history page. */
 export type Filter = "all" | "downloading" | "done" | "paused" | "error" | "history" | `cat:${string}`;
@@ -23,12 +24,12 @@ export function matchFilter(f: Filter, i: Item): boolean {
   return ENTRIES.find((e) => e.id === f)!.match(i);
 }
 
-export function Sidebar({ items, filter, onFilter, links, linkSpeeds, settings, onManage }: { items: Item[]; filter: Filter; onFilter: (f: Filter) => void; links: Link[]; linkSpeeds: Map<string, number>; settings?: Settings; onManage: () => void }) {
+export function Sidebar({ items, filter, onFilter, links, linkSpeeds, settings, onManage, collapsed, onToggle }: { items: Item[]; filter: Filter; onFilter: (f: Filter) => void; links: Link[]; linkSpeeds: Map<string, number>; settings?: Settings; onManage: () => void; collapsed: boolean; onToggle: () => void }) {
   const enabled = (n: string) => !settings || settings.enabled_links === null || settings.enabled_links.includes(n);
   const cats = CATEGORIES.map((c) => ({ ...c, n: items.filter((i) => categoryOf(fileName(i.url, i.filename)) === c.id).length })).filter((c) => c.n > 0);
   const button = (id: Filter, label: string, icon: string, n?: number) => (
     <li key={id}>
-      <button className={`nav-item${filter === id ? " on" : ""}`} onClick={() => onFilter(id)} aria-current={filter === id}>
+      <button className={`nav-item${filter === id ? " on" : ""}`} onClick={() => onFilter(id)} aria-current={filter === id} title={label}>
         <Icon name={icon} size={16} />
         <span title={label}>{label}</span>
         {n ? <small>{n}</small> : null}
@@ -36,10 +37,11 @@ export function Sidebar({ items, filter, onFilter, links, linkSpeeds, settings, 
     </li>
   );
   return (
-    <nav className="sidebar" aria-label={t("Sidebar")}>
+    <nav className={`sidebar${collapsed ? " collapsed" : ""}`} aria-label={t("Sidebar")}>
       <div className="brand" data-tauri-drag-region>
         <img src="/grabnr.svg" alt={t("")} width="26" height="26" />
         <span>{t("grabnr")}</span>
+        <button className="ghost side-toggle" onClick={onToggle} aria-label={collapsed ? t("Expand sidebar") : t("Collapse sidebar")} title={`${collapsed ? t("Expand sidebar") : t("Collapse sidebar")} (${MOD}B)`} aria-expanded={!collapsed}><Icon name="sidebar" size={17} /></button>
       </div>
       <ul className="nav">
         {ENTRIES.filter((e) => e.id !== "error" || items.some(e.match)).map((e) => button(e.id, t(e.label), e.icon, items.filter(e.match).length))}
@@ -57,14 +59,14 @@ export function Sidebar({ items, filter, onFilter, links, linkSpeeds, settings, 
       <ul className="conns">
         {links.length === 0 && <li className="muted small">{t("No active links")}</li>}
         {links.map((l) => (
-          <li key={l.name} className={enabled(l.name) ? "" : "off"}>
+          <li key={l.name} className={enabled(l.name) ? "" : "off"} title={`${l.label} · ${l.name} · ${l.ipv4}`}>
             <i className="tile" style={{ background: linkColor(l.name) }}><Icon name={linkIcon(l.kind)} size={14} /></i>
             <span className="conn-name" title={`${l.label} · ${l.name} · ${l.ipv4}`}>{l.label}</span>
             <small>{linkSpeeds.get(l.name) ? rate(linkSpeeds.get(l.name)!) : enabled(l.name) ? t("Idle") : t("Off")}</small>
           </li>
         ))}
       </ul>
-      <button className="manage" onClick={onManage}><Icon name="sliders" size={15} />{t("Manage Connections")}</button>
+      <button className="manage" onClick={onManage} title={t("Manage Connections")}><Icon name="sliders" size={15} /><span>{t("Manage Connections")}</span></button>
     </nav>
   );
 }

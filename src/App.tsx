@@ -4,6 +4,7 @@ import { MainWindow } from "./MainWindow";
 import { TrayPopover } from "./TrayPopover";
 import "./App.css";
 import { isMac as mac } from "./platform";
+import { applyTheme, savedTheme } from "./theme";
 
 // The same bundle serves the main window and the menu bar popover (`?view=tray`).
 const view = new URLSearchParams(window.location.search).get("view");
@@ -16,7 +17,7 @@ export default function App() {
   useEffect(() => {
     const r = document.documentElement;
     // Only the native macOS windows have a vibrancy material behind the page; elsewhere use solid colours.
-    r.dataset.vibrancy = native && mac ? "on" : "off";
+    applyTheme(savedTheme(), native, mac);
     r.dataset.mac = mac ? "on" : "off";
     r.dataset.view = view === "tray" ? "tray" : "main";
     void initLanguage().then(() => setReady(true));

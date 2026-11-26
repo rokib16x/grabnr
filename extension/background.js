@@ -39,6 +39,17 @@ function failMessage(r) {
   return 'grabnr could not take this download; the browser is handling it.';
 }
 
+// How long to wait before dropping the browser's copy. Cancelling or erasing an item while the browser is still
+// inside its filename-determination step (we answer that step right after handleDownload returns) can crash
+// Brave's main process, so the drop runs only after the browser has been answered.
+const DROP_DELAY_MS = globalThis.__GRABNR_DROP_DELAY_MS ?? 250;
+
+// Cancel only. Erasing the item removes it out from under Brave's download button/bubble, which can crash Brave's
+// main process the next time it refreshes that UI (e.g. when it regains focus). A cancelled entry is harmless.
+async function dropBrowserCopy(id) {
+  try { await chrome.downloads.cancel(id); } catch { /* may be already done */ }
+}
+
 export async function handleDownload(item) {
   if (handled.has(item.id)) return;
   handled.add(item.id);
@@ -48,9 +59,8 @@ export async function handleDownload(item) {
   const r = await addDownload({ ...(await buildRequest(item)), ask: settings.askFirst }, settings.token);
   if (r.ok) {
     await refreshBadge(false);
-    // Only after the app accepted it do we drop the browser's copy.
-    try { await chrome.downloads.cancel(item.id); } catch { /* may be already done */ }
-    try { await chrome.downloads.erase({ id: item.id }); } catch { /* ignore */ }
+    // Only after the app accepted it do we drop the browser's copy, and only once the browser is no longer waiting on us.
+    setTimeout(() => { dropBrowserCopy(item.id); }, DROP_DELAY_MS);
   } else {
     // Fail open: leave the browser download alone.
     await refreshBadge(true);

@@ -21,7 +21,7 @@ export function firefoxManifest(m) {
   // Firefox runs the background as an event page made of scripts; it has no service workers.
   f.background = { scripts: [m.background.service_worker], type: 'module' };
   f.browser_specific_settings = {
-    gecko: { id: 'grabnr@grabnr.invalid', strict_min_version: '140.0', data_collection_permissions: { required: ['none'] } },
+    gecko: { id: 'grabnr@grabnr.local', strict_min_version: '140.0', data_collection_permissions: { required: ['none'] } },
     gecko_android: { strict_min_version: '142.0' },
   };
   return f;
